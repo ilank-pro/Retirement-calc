@@ -156,6 +156,74 @@ def calculate_four_percent_rule(monthly_spend: float) -> float:
     return annual_spending * 25  # 4% rule = 25x annual expenses
 
 
+def calculate_savings_balance(df: pd.DataFrame, nest_egg: float, discount_rate: float) -> pd.DataFrame:
+    """Calculate year-by-year savings balance decline during retirement."""
+    df = df.copy()
+    savings_balance = nest_egg
+    savings_balances = []
+    
+    for _, row in df.iterrows():
+        net_need = row['Net_Need']
+        
+        # Apply investment return, then withdraw net need
+        savings_balance = savings_balance * (1 + discount_rate) - net_need
+        
+        # Don't allow negative balances (would indicate plan failure)
+        savings_balance = max(0, savings_balance)
+        savings_balances.append(savings_balance)
+    
+    df['Savings_Balance'] = savings_balances
+    return df
+
+
+def create_retirement_chart(df: pd.DataFrame, currency: str) -> plt.Figure:
+    """Create a custom matplotlib chart with dual y-axes for retirement projection."""
+    # Set up the figure and primary axis
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Convert data to thousands for readability
+    ages = df['Age']
+    gross_spending = df['Gross_Spending'] / 1000
+    social_security = df['Social_Security'] / 1000
+    net_need = df['Net_Need'] / 1000
+    savings_balance = df['Savings_Balance'] / 1000
+    
+    # Plot on left axis (spending and benefits)
+    line1 = ax1.plot(ages, gross_spending, 'b-', linewidth=2, label='Gross Spending')
+    line2 = ax1.plot(ages, social_security, 'orange', linewidth=2, label='Social Security')
+    line3 = ax1.plot(ages, net_need, 'r-', linewidth=2, label='Net Need')
+    
+    # Configure left axis
+    ax1.set_xlabel('Age', fontsize=12)
+    ax1.set_ylabel(f'Annual Amount (thousands {currency})', fontsize=12)
+    ax1.tick_params(axis='y', labelcolor='black')
+    ax1.grid(True, alpha=0.3)
+    
+    # Create secondary y-axis for savings balance
+    ax2 = ax1.twinx()
+    line4 = ax2.plot(ages, savings_balance, 'g-', linewidth=3, label='Savings Balance')
+    
+    # Configure right axis
+    ax2.set_ylabel(f'Savings Balance (thousands {currency})', fontsize=12, color='green')
+    ax2.tick_params(axis='y', labelcolor='green')
+    
+    # Combine legends from both axes
+    lines1 = line1 + line2 + line3
+    lines2 = line4
+    labels1 = [l.get_label() for l in lines1]
+    labels2 = [l.get_label() for l in lines2]
+    
+    # Create legend
+    ax1.legend(lines1, labels1, loc='upper left', bbox_to_anchor=(0, 1))
+    ax2.legend(lines2, labels2, loc='upper right', bbox_to_anchor=(1, 1))
+    
+    # Set title and layout
+    fig.suptitle('Annual Financial Projection', fontsize=14, fontweight='bold')
+    fig.tight_layout()
+    
+    return fig
+
+
 # Scenario presets
 SCENARIO_PRESETS = {
     "Conservative": {
@@ -334,6 +402,9 @@ real‑world spending patterns and country-specific social security systems.""")
     df = add_social_security(df, ss_start, base_ss, spouse, config)
     nest_egg = pv_of_needs(df, ret_age, discount_rate)
     
+    # Add savings balance calculation
+    df = calculate_savings_balance(df, nest_egg, discount_rate)
+    
     # Calculate 4% rule comparison
     four_percent_rule = calculate_four_percent_rule(monthly_spend)
 
@@ -392,28 +463,45 @@ real‑world spending patterns and country-specific social security systems.""")
             st.text(f"• Single decline (65+): {single_decline:.2%}/year")
 
     with col2:
-        # Create the chart with proper currency formatting
-        chart_df = df.set_index("Age")[["Gross_Spending", "Social_Security", "Net_Need"]]
+        # Create custom dual-axis chart
+        st.subheader("Annual Financial Projection")
+        st.caption("📊 **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green)**")
         
-        # Convert to thousands for better readability
-        chart_df = chart_df / 1000
+        # Generate and display the custom chart
+        fig = create_retirement_chart(df, config['currency'])
+        st.pyplot(fig, use_container_width=True)
         
-        st.subheader(f"Annual Financial Projection (thousands {config['currency']})")
-        st.line_chart(chart_df)
+        # Add interpretation help
+        final_balance = df.iloc[-1]['Savings_Balance']
+        if final_balance > nest_egg * 0.5:
+            st.success(f"✅ **Sustainable plan**: Savings remain strong ({config['symbol']}{final_balance/1000:.0f}k at age 95)")
+        elif final_balance > 0:
+            st.warning(f"⚠️ **Adequate plan**: Savings decline but remain positive ({config['symbol']}{final_balance/1000:.0f}k at age 95)")
+        else:
+            st.error("🚨 **Unsustainable plan**: Savings would be depleted before age 95")
+            # Find when savings run out
+            depletion_age = None
+            for i, balance in enumerate(df['Savings_Balance']):
+                if balance <= 0:
+                    depletion_age = df.iloc[i]['Age']
+                    break
+            if depletion_age:
+                st.error(f"💸 Savings would run out around age {depletion_age:.0f}")
 
     # Detailed breakdown
     st.subheader("📋 Annual Spending & Income Detail (first 20 years)")
     
     # Format the dataframe for display
-    display_df = df[["Age", "Gross_Spending", "Social_Security", "Net_Need"]].head(20).copy()
+    display_df = df[["Age", "Gross_Spending", "Social_Security", "Net_Need", "Savings_Balance"]].head(20).copy()
     
     # Format currency columns
-    for col in ["Gross_Spending", "Social_Security", "Net_Need"]:
+    for col in ["Gross_Spending", "Social_Security", "Net_Need", "Savings_Balance"]:
         display_df[col] = display_df[col].apply(lambda x: format_currency(x, currency_symbol))
     
     # Rename columns for display
     display_df.columns = ["Age", f"Gross Spending ({config['currency']})", 
-                         f"{ss_name} ({config['currency']})", f"Net Need ({config['currency']})"]
+                         f"{ss_name} ({config['currency']})", f"Net Need ({config['currency']})",
+                         f"Savings Balance ({config['currency']})"]
     
     st.dataframe(display_df, use_container_width=True)
 
@@ -471,7 +559,9 @@ real‑world spending patterns and country-specific social security systems.""")
         temp_df = project_spending(monthly_spend, spouse, ret_age, currency_symbol, 
                                  scenario_preset["early_decline"], scenario_preset["couple_decline"], scenario_preset["single_decline"])
         temp_df = add_social_security(temp_df, ss_start, base_ss, spouse, config)
-        scenario_results[scenario_name] = pv_of_needs(temp_df, ret_age, scenario_preset["discount_rate"])
+        temp_nest_egg = pv_of_needs(temp_df, ret_age, scenario_preset["discount_rate"])
+        temp_df = calculate_savings_balance(temp_df, temp_nest_egg, scenario_preset["discount_rate"])
+        scenario_results[scenario_name] = temp_nest_egg
     
     with col_scenario1:
         st.metric("Conservative Scenario", format_currency(scenario_results["Conservative"], currency_symbol),
@@ -519,6 +609,15 @@ real‑world spending patterns and country-specific social security systems.""")
         - Traditional safe withdrawal rate of 4% annually (25x expenses)
         - Based on Trinity Study and subsequent research
         - Provides benchmark for reality-checking results
+        
+        **Savings Balance Projection (Green Line):**
+        - Shows your actual savings balance declining over retirement years
+        - Each year: balance grows by investment return, then net need is withdrawn
+        - **Interpretation**:
+          • Line goes up: Your assumptions may be too optimistic (high returns/aggressive spending decline)  
+          • Line declines gradually: Reasonable plan that depletes savings by age 95
+          • Line hits zero: Plan fails - savings run out before end of retirement
+        - Provides reality check on whether your retirement plan is sustainable
         
         **Social Security Data Sources:**
         - **USA:** Social Security Administration (SSA) 2024 data
