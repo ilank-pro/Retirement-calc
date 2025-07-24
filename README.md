@@ -36,6 +36,19 @@ A comprehensive retirement planning tool that estimates the nest-egg required to
 
 ## 🚀 Quick Start
 
+### Super Quick Start (One Command)
+```bash
+git clone https://github.com/ilank-pro/Retirement-calc.git
+cd Retirement-calc
+./start.sh
+```
+
+The `start.sh` script will automatically:
+- ✅ Check Python installation
+- ✅ Create virtual environment (if needed)
+- ✅ Install dependencies 
+- ✅ Launch the application
+
 ### Prerequisites
 - Python 3.8 or higher
 - Virtual environment (recommended)
@@ -60,6 +73,13 @@ A comprehensive retirement planning tool that estimates the nest-egg required to
    ```
 
 4. **Run the application**
+   
+   **Option A: Using the start script (Recommended)**
+   ```bash
+   ./start.sh
+   ```
+   
+   **Option B: Manual run**
    ```bash
    streamlit run retirement_calculator.py
    ```
