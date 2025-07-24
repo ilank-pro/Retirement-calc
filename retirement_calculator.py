@@ -246,9 +246,7 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.F
             mode='lines',
             name='Gross Spending',
             line=dict(color='blue', width=2),
-            hovertemplate='<b>Age %{x}</b><br>' +
-                         'Gross Spending: %{customdata[0]}<br>' +
-                         '<extra></extra>',
+            hovertemplate='Gross Spending: %{customdata[0]}<extra></extra>',
             customdata=[[f'{currency}{val*1000:,.0f}'] for val in gross_spending]
         ),
         secondary_y=False,
@@ -261,9 +259,7 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.F
             mode='lines',
             name='Social Security',
             line=dict(color='orange', width=2),
-            hovertemplate='<b>Age %{x}</b><br>' +
-                         'Social Security: %{customdata[0]}<br>' +
-                         '<extra></extra>',
+            hovertemplate='Social Security: %{customdata[0]}<extra></extra>',
             customdata=[[f'{currency}{val*1000:,.0f}'] for val in social_security]
         ),
         secondary_y=False,
@@ -276,9 +272,7 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.F
             mode='lines',
             name='Net Need',
             line=dict(color='red', width=2),
-            hovertemplate='<b>Age %{x}</b><br>' +
-                         'Net Need: %{customdata[0]}<br>' +
-                         '<extra></extra>',
+            hovertemplate='Net Need: %{customdata[0]}<extra></extra>',
             customdata=[[f'{currency}{val*1000:,.0f}'] for val in net_need]
         ),
         secondary_y=False,
@@ -292,9 +286,7 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.F
             mode='lines',
             name='Savings Balance',
             line=dict(color='green', width=3),
-            hovertemplate='<b>Age %{x}</b><br>' +
-                         'Savings Balance: %{customdata[0]}<br>' +
-                         '<extra></extra>',
+            hovertemplate='Savings Balance: %{customdata[0]}<extra></extra>',
             customdata=[[f'{currency}{val*1000:,.0f}'] for val in savings_balance]
         ),
         secondary_y=True,
