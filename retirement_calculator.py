@@ -114,16 +114,16 @@ def ss_multiplier(claim_age: int, country_config: dict) -> float:
     return 1.0
 
 
-def project_spending(monthly_spend: float, spouse: bool, ret_age: int, currency_symbol: str) -> pd.DataFrame:
+def project_spending(monthly_spend: float, spouse: bool, ret_age: int, currency_symbol: str, early_decline: float = EARLY_DECLINE, couple_decline: float = COUPLE_DECLINE, single_decline: float = SINGLE_DECLINE) -> pd.DataFrame:
     base = monthly_spend * 12  # convert to annual
     records = []
     ann_spend = base
     for age in range(ret_age, MAX_AGE + 1):
         # Phase‑specific declines
         if 62 <= age < 65:
-            ann_spend *= (1 - EARLY_DECLINE)
+            ann_spend *= (1 - early_decline)
         elif age >= 65:
-            rate = COUPLE_DECLINE if spouse else SINGLE_DECLINE
+            rate = couple_decline if spouse else single_decline
             ann_spend *= (1 - rate)
         records.append({"Age": age, "Gross_Spending": ann_spend})
     return pd.DataFrame(records)
@@ -139,8 +139,8 @@ def add_social_security(df: pd.DataFrame, ss_start: int, base_monthly: float, sp
     return df
 
 
-def pv_of_needs(df: pd.DataFrame, ret_age: int) -> float:
-    df["Discount_Factor"] = (1 + POST_RET_ROI) ** (-(df["Age"] - ret_age))
+def pv_of_needs(df: pd.DataFrame, ret_age: int, discount_rate: float = POST_RET_ROI) -> float:
+    df["Discount_Factor"] = (1 + discount_rate) ** (-(df["Age"] - ret_age))
     df["PV_Need"] = df["Net_Need"] * df["Discount_Factor"]
     return df["PV_Need"].sum()
 
@@ -148,6 +148,38 @@ def pv_of_needs(df: pd.DataFrame, ret_age: int) -> float:
 def format_currency(amount: float, currency_symbol: str) -> str:
     """Format currency with appropriate symbol and comma separators."""
     return f"{currency_symbol}{amount:,.0f}"
+
+
+def calculate_four_percent_rule(monthly_spend: float) -> float:
+    """Calculate nest egg needed using traditional 4% withdrawal rule."""
+    annual_spending = monthly_spend * 12
+    return annual_spending * 25  # 4% rule = 25x annual expenses
+
+
+# Scenario presets
+SCENARIO_PRESETS = {
+    "Conservative": {
+        "discount_rate": 0.04,
+        "early_decline": 0.005,  # 0.5% decline ages 62-64
+        "couple_decline": 0.01,   # 1% decline for couples
+        "single_decline": 0.008,  # 0.8% decline for singles
+        "description": "Conservative assumptions: Lower returns, slower spending decline"
+    },
+    "Moderate": {
+        "discount_rate": 0.055,
+        "early_decline": 0.0075,  # 0.75% decline ages 62-64
+        "couple_decline": 0.017,   # 1.7% decline for couples
+        "single_decline": 0.0125,  # 1.25% decline for singles
+        "description": "Moderate assumptions: Balanced approach"
+    },
+    "Optimistic": {
+        "discount_rate": POST_RET_ROI,
+        "early_decline": EARLY_DECLINE,
+        "couple_decline": COUPLE_DECLINE,
+        "single_decline": SINGLE_DECLINE,
+        "description": "Original optimistic assumptions: High returns, aggressive spending decline"
+    }
+}
 
 
 def main():
@@ -230,10 +262,80 @@ real‑world spending patterns and country-specific social security systems.""")
             help=f"Your benefit adjustment for claiming at age {ss_start}"
         )
 
-    # Calculations
-    df = project_spending(monthly_spend, spouse, ret_age, currency_symbol)
+        # Advanced assumptions section
+        st.header("⚙️ Advanced Assumptions")
+        
+        # Scenario selection
+        scenario = st.selectbox(
+            "Planning Scenario",
+            options=list(SCENARIO_PRESETS.keys()),
+            index=1,  # Default to "Moderate"
+            help="Choose conservative, moderate, or optimistic assumptions"
+        )
+        
+        preset = SCENARIO_PRESETS[scenario]
+        st.info(preset["description"])
+        
+        # Start with preset values
+        discount_rate = preset["discount_rate"]
+        early_decline = preset["early_decline"]
+        couple_decline = preset["couple_decline"]
+        single_decline = preset["single_decline"]
+        
+        # Allow custom adjustments
+        with st.expander("🔧 Customize Assumptions"):
+            st.warning("⚠️ **Caution**: The default 'Optimistic' scenario may underestimate retirement needs. Consider using 'Conservative' or 'Moderate' for safer planning.")
+            
+            discount_rate = st.slider(
+                "Real investment return during retirement",
+                min_value=0.03,
+                max_value=0.08,
+                value=preset["discount_rate"],
+                step=0.005,
+                format="%.1f%%",
+                help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+"
+            )
+            
+            st.subheader("Spending Decline Rates")
+            st.caption("Research shows spending typically declines in retirement, but rates vary widely.")
+            
+            early_decline = st.slider(
+                "Spending decline ages 62-64 (% per year)",
+                min_value=0.0,
+                max_value=0.02,
+                value=preset["early_decline"],
+                step=0.0025,
+                format="%.2f%%",
+                help="Transition from 'go-go' to 'slow-go' years"
+            )
+            
+            couple_decline = st.slider(
+                "Couple spending decline after 65 (% per year)",
+                min_value=0.005,
+                max_value=0.03,
+                value=preset["couple_decline"],
+                step=0.0025,
+                format="%.2f%%",
+                help="Annual spending decline for couples in later retirement"
+            )
+            
+            single_decline = st.slider(
+                "Single spending decline after 65 (% per year)",
+                min_value=0.005,
+                max_value=0.025,
+                value=preset["single_decline"],
+                step=0.0025,
+                format="%.2f%%",
+                help="Annual spending decline for singles in later retirement"
+            )
+
+    # Calculations with custom parameters
+    df = project_spending(monthly_spend, spouse, ret_age, currency_symbol, early_decline, couple_decline, single_decline)
     df = add_social_security(df, ss_start, base_ss, spouse, config)
-    nest_egg = pv_of_needs(df, ret_age)
+    nest_egg = pv_of_needs(df, ret_age, discount_rate)
+    
+    # Calculate 4% rule comparison
+    four_percent_rule = calculate_four_percent_rule(monthly_spend)
 
     # Main display
     col1, col2 = st.columns([1, 2])
@@ -243,6 +345,25 @@ real‑world spending patterns and country-specific social security systems.""")
             label=f"**Required nest‑egg at age {ret_age}**", 
             value=format_currency(nest_egg, currency_symbol),
             help="Present value of your retirement needs minus Social Security benefits"
+        )
+        
+        # 4% rule comparison
+        comparison_ratio = nest_egg / four_percent_rule if four_percent_rule > 0 else 0
+        if comparison_ratio < 0.7:
+            comparison_delta = f"-{(1-comparison_ratio)*100:.0f}% vs 4% rule"
+            comparison_color = "normal"
+        elif comparison_ratio > 1.3:
+            comparison_delta = f"+{(comparison_ratio-1)*100:.0f}% vs 4% rule"
+            comparison_color = "inverse"
+        else:
+            comparison_delta = f"{(comparison_ratio-1)*100:+.0f}% vs 4% rule"
+            comparison_color = "off"
+            
+        st.metric(
+            "4% Rule Comparison",
+            format_currency(four_percent_rule, currency_symbol),
+            delta=comparison_delta,
+            help="Traditional 4% withdrawal rule suggests 25x annual expenses. Significant differences may indicate aggressive assumptions."
         )
         
         # Additional metrics
@@ -260,6 +381,15 @@ real‑world spending patterns and country-specific social security systems.""")
             f"{(total_ss_pv / total_spending_pv * 100):.1f}%",
             help="Percentage of retirement expenses covered by Social Security"
         )
+        
+        # Show key assumptions being used
+        st.subheader("📋 Current Assumptions")
+        st.text(f"• Investment return: {discount_rate:.1%}")
+        st.text(f"• Early decline (62-64): {early_decline:.2%}/year")
+        if spouse:
+            st.text(f"• Couple decline (65+): {couple_decline:.2%}/year")
+        else:
+            st.text(f"• Single decline (65+): {single_decline:.2%}/year")
 
     with col2:
         # Create the chart with proper currency formatting
@@ -327,18 +457,68 @@ real‑world spending patterns and country-specific social security systems.""")
     
     st.markdown(country_notes[selected_country])
 
+    # Risk warnings and scenario comparison
+    st.subheader("⚠️ Important Planning Considerations")
+    
+    # Show scenario comparison
+    col_scenario1, col_scenario2, col_scenario3 = st.columns(3)
+    
+    scenarios_to_compare = ["Conservative", "Moderate", "Optimistic"]
+    scenario_results = {}
+    
+    for scenario_name in scenarios_to_compare:
+        scenario_preset = SCENARIO_PRESETS[scenario_name]
+        temp_df = project_spending(monthly_spend, spouse, ret_age, currency_symbol, 
+                                 scenario_preset["early_decline"], scenario_preset["couple_decline"], scenario_preset["single_decline"])
+        temp_df = add_social_security(temp_df, ss_start, base_ss, spouse, config)
+        scenario_results[scenario_name] = pv_of_needs(temp_df, ret_age, scenario_preset["discount_rate"])
+    
+    with col_scenario1:
+        st.metric("Conservative Scenario", format_currency(scenario_results["Conservative"], currency_symbol),
+                 help="Lower investment returns (4%), slower spending decline")
+    
+    with col_scenario2:
+        st.metric("Moderate Scenario", format_currency(scenario_results["Moderate"], currency_symbol),
+                 help="Balanced assumptions (5.5% returns, moderate spending decline)")
+    
+    with col_scenario3:
+        st.metric("Optimistic Scenario", format_currency(scenario_results["Optimistic"], currency_symbol),
+                 help="Original assumptions (7% returns, aggressive spending decline)")
+    
+    if scenario == "Optimistic":
+        st.warning("🚨 **You're using optimistic assumptions!** Consider reviewing the 'Conservative' or 'Moderate' scenarios for more robust planning.")
+    elif scenario == "Conservative":
+        st.success("✅ **Conservative planning approach** - This provides a safety buffer for retirement planning.")
+    else:
+        st.info("ℹ️ **Balanced approach** - Moderate assumptions balance optimism with prudent planning.")
+
     # Methodology and assumptions
     with st.expander("📖 Methodology & Data Sources"):
         st.markdown(f"""
-        **Spending Decline Assumptions:**
-        - Based on RAND 2023, CRR 2021, J.P. Morgan Guide to Retirement 2025
-        - 1% annual decline ages 62-64 (go-go to slow-go transition)
-        - Couples: 2.4% annual decline after 65
-        - Singles: 1.7% annual decline after 65
+        **⚠️ IMPORTANT DISCLAIMERS:**
+        - Results vary significantly based on assumptions. Conservative planning is recommended.
+        - Healthcare costs, inflation, and sequence-of-returns risk are not fully modeled.
+        - Past investment performance doesn't guarantee future results.
+        - Consider consulting a financial advisor for personalized guidance.
         
-        **Investment Return:**
-        - 7% real return assumption during retirement
-        - Based on historical long-term market performance
+        **Spending Decline Research:**
+        - Based on RAND 2023, CRR 2021, J.P. Morgan Guide to Retirement 2025
+        - **Original research findings** (used in "Optimistic" scenario):
+          • 1% annual decline ages 62-64 (go-go to slow-go transition)
+          • Couples: 2.4% annual decline after 65
+          • Singles: 1.7% annual decline after 65
+        - **Reality check**: Individual spending patterns vary widely and may not decline as much
+        
+        **Investment Return Assumptions:**
+        - **Conservative**: 4% real return (bond-heavy portfolio)
+        - **Moderate**: 5.5% real return (balanced portfolio)
+        - **Optimistic**: 7% real return (stock-heavy portfolio, based on historical averages)
+        - Does not account for sequence-of-returns risk (poor early returns can be devastating)
+        
+        **4% Rule Comparison:**
+        - Traditional safe withdrawal rate of 4% annually (25x expenses)
+        - Based on Trinity Study and subsequent research
+        - Provides benchmark for reality-checking results
         
         **Social Security Data Sources:**
         - **USA:** Social Security Administration (SSA) 2024 data
