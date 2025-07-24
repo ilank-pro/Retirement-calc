@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 """
 Multi-Currency Retirement Needs Calculator (Streamlit)
@@ -220,6 +222,103 @@ def create_retirement_chart(df: pd.DataFrame, currency: str) -> plt.Figure:
     # Set title and layout
     fig.suptitle('Annual Financial Projection', fontsize=14, fontweight='bold')
     fig.tight_layout()
+    
+    return fig
+
+
+def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.Figure:
+    """Create an interactive Plotly chart with dual y-axes and hover tooltips for retirement projection."""
+    # Create subplot with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Convert data to thousands for readability
+    ages = df['Age']
+    gross_spending = df['Gross_Spending'] / 1000
+    social_security = df['Social_Security'] / 1000
+    net_need = df['Net_Need'] / 1000
+    savings_balance = df['Savings_Balance'] / 1000
+    
+    # Add traces for left axis (spending and benefits)
+    fig.add_trace(
+        go.Scatter(
+            x=ages,
+            y=gross_spending,
+            mode='lines',
+            name='Gross Spending',
+            line=dict(color='blue', width=2),
+            hovertemplate='<b>Age %{x}</b><br>' +
+                         'Gross Spending: %{customdata[0]}<br>' +
+                         '<extra></extra>',
+            customdata=[[f'{currency}{val*1000:,.0f}'] for val in gross_spending]
+        ),
+        secondary_y=False,
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=ages,
+            y=social_security,
+            mode='lines',
+            name='Social Security',
+            line=dict(color='orange', width=2),
+            hovertemplate='<b>Age %{x}</b><br>' +
+                         'Social Security: %{customdata[0]}<br>' +
+                         '<extra></extra>',
+            customdata=[[f'{currency}{val*1000:,.0f}'] for val in social_security]
+        ),
+        secondary_y=False,
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=ages,
+            y=net_need,
+            mode='lines',
+            name='Net Need',
+            line=dict(color='red', width=2),
+            hovertemplate='<b>Age %{x}</b><br>' +
+                         'Net Need: %{customdata[0]}<br>' +
+                         '<extra></extra>',
+            customdata=[[f'{currency}{val*1000:,.0f}'] for val in net_need]
+        ),
+        secondary_y=False,
+    )
+    
+    # Add trace for right axis (savings balance)
+    fig.add_trace(
+        go.Scatter(
+            x=ages,
+            y=savings_balance,
+            mode='lines',
+            name='Savings Balance',
+            line=dict(color='green', width=3),
+            hovertemplate='<b>Age %{x}</b><br>' +
+                         'Savings Balance: %{customdata[0]}<br>' +
+                         '<extra></extra>',
+            customdata=[[f'{currency}{val*1000:,.0f}'] for val in savings_balance]
+        ),
+        secondary_y=True,
+    )
+    
+    # Update layout
+    fig.update_layout(
+        title='Annual Financial Projection',
+        xaxis_title='Age',
+        hovermode='x unified',
+        height=500,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    # Set y-axes titles
+    fig.update_yaxes(title_text=f'Annual Amount (thousands {currency})', secondary_y=False)
+    fig.update_yaxes(title_text=f'<span style="color:green">Savings Balance (thousands {currency})</span>', secondary_y=True)
     
     return fig
 
@@ -463,13 +562,13 @@ real‑world spending patterns and country-specific social security systems.""")
             st.text(f"• Single decline (65+): {single_decline:.2%}/year")
 
     with col2:
-        # Create custom dual-axis chart
+        # Create interactive dual-axis chart with hover tooltips
         st.subheader("Annual Financial Projection")
-        st.caption("📊 **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green)**")
+        st.caption("📊 **Interactive Chart**: Hover over any point to see detailed values | **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green)**")
         
-        # Generate and display the custom chart
-        fig = create_retirement_chart(df, config['currency'])
-        st.pyplot(fig, use_container_width=True)
+        # Generate and display the interactive chart
+        fig = create_interactive_retirement_chart(df, config['symbol'])
+        st.plotly_chart(fig, use_container_width=True)
         
         # Add interpretation help
         final_balance = df.iloc[-1]['Savings_Balance']
