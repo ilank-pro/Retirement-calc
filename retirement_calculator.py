@@ -399,10 +399,26 @@ def calculate_wealth_accumulation(savings_accounts: list, user_age: int, ret_age
         total_wealth = 0
         
         for account in savings_accounts:
+            account_value = 0
+            
+            # Calculate growth from initial amount
             if account['amount'] > 0:
-                # Apply compound growth with account's ROI
-                account_value = account['amount'] * (1 + account['roi']) ** years_elapsed
-                total_wealth += account_value
+                account_value += account['amount'] * (1 + account['roi']) ** years_elapsed
+            
+            # Calculate growth from monthly deposits (Future Value of Annuity)
+            monthly_deposit = account.get('monthly_deposit', 0)
+            if monthly_deposit > 0 and years_elapsed > 0:
+                months_elapsed = years_elapsed * 12
+                monthly_rate = account['roi'] / 12
+                if monthly_rate > 0:
+                    # FV of ordinary annuity formula
+                    annuity_value = monthly_deposit * ((1 + monthly_rate) ** months_elapsed - 1) / monthly_rate
+                else:
+                    # If no interest, just sum the deposits
+                    annuity_value = monthly_deposit * months_elapsed
+                account_value += annuity_value
+            
+            total_wealth += account_value
         
         records.append({"Age": age, "Wealth_Balance": total_wealth})
     
@@ -555,7 +571,8 @@ real‑world spending patterns and country-specific social security systems.""")
                     st.session_state.savings_accounts.append({
                         'name': new_account_name,
                         'amount': 0,
-                        'roi': 0.04
+                        'roi': 0.04,
+                        'monthly_deposit': 0
                     })
                     st.rerun()
         
@@ -601,6 +618,25 @@ real‑world spending patterns and country-specific social security systems.""")
                     ) / 100
                     # Display ROI caption below the input (matching amount style)
                     st.caption(f"ROI: {account['roi']*100:.1f}%")
+                
+                # Row 3: Monthly deposit input
+                col1, col2 = st.columns([3, 2])
+                
+                with col1:
+                    account['monthly_deposit'] = st.number_input(
+                        "Monthly Deposit",
+                        value=account.get('monthly_deposit', 0),
+                        step=100,
+                        key=f"account_monthly_deposit_{i}",
+                        label_visibility="collapsed",
+                        format="%d"
+                    )
+                    # Display currency symbol below the input (matching amount style)
+                    st.caption(f"{currency_symbol}{account['monthly_deposit']:,}/month")
+                
+                with col2:
+                    # Empty column for alignment
+                    st.empty()
                         
                 st.divider()
         
