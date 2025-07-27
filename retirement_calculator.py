@@ -527,11 +527,12 @@ real‑world spending patterns and country-specific social security systems.""")
         st.subheader("🏠 Planned Expenses")
         
         # Add new planned expense
-        col1, col2 = st.columns([4, 1])
+        col1, col2 = st.columns([5, 1])
         with col1:
             new_expense_name = st.text_input("Expense name", placeholder="e.g., Wedding, House, Car", key="new_expense_name")
         with col2:
-            if st.button("➕", help="Add expense", key="add_expense_btn"):
+            st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)  # Align button with input bottom
+            if st.button("➕", help="Add expense"):
                 if new_expense_name:
                     st.session_state.planned_expenses.append({
                         'name': new_expense_name,
@@ -544,21 +545,32 @@ real‑world spending patterns and country-specific social security systems.""")
         expenses_to_remove = []
         for i, expense in enumerate(st.session_state.planned_expenses):
             with st.container():
-                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                # Row 1: Expense name and remove button (aligned with Add button)
+                col1, col2 = st.columns([5, 1])
                 
                 with col1:
                     st.text(f"💸 {expense['name']}")
                 
                 with col2:
+                    if st.button("❌", key=f"remove_expense_{i}", help="Remove expense"):
+                        expenses_to_remove.append(i)
+                
+                # Row 2: Amount input and age input
+                col1, col2 = st.columns([3, 2])
+                
+                with col1:
                     expense['amount'] = st.number_input(
-                        f"Amount ({currency_symbol})",
+                        "Amount",
                         value=expense['amount'],
                         step=1000,
                         key=f"expense_amount_{i}",
-                        label_visibility="collapsed"
+                        label_visibility="collapsed",
+                        format="%d"
                     )
+                    # Display currency symbol below the input (matching savings accounts style)
+                    st.caption(f"{currency_symbol}{expense['amount']:,}")
                 
-                with col3:
+                with col2:
                     # Auto-adjust expense age if it's in the past to prevent validation error
                     original_age = expense['age']
                     adjusted_expense_age = max(expense['age'], user_age)
@@ -574,13 +586,11 @@ real‑world spending patterns and country-specific social security systems.""")
                         label_visibility="collapsed"
                     )
                     
-                    # Show warning if expense was auto-adjusted
+                    # Show caption and warning if needed (matching savings accounts style)
                     if was_adjusted:
                         st.caption(f"⚠️ Adjusted from age {original_age} to {adjusted_expense_age}")
-                
-                with col4:
-                    if st.button("🗑️", key=f"remove_expense_{i}", help="Remove expense"):
-                        expenses_to_remove.append(i)
+                    else:
+                        st.caption(f"At age {expense['age']}")
                         
                 st.divider()
         
