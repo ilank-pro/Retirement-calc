@@ -4,6 +4,37 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import logging
+import sys
+
+# Debug logging control - set to True to enable detailed logging
+DEBUG_LOGGING = False  # Default to False for production use
+
+# Setup logger for retirement calculator debugging (only if enabled)
+if DEBUG_LOGGING:
+    import os
+    log_file_path = os.path.join(os.getcwd(), 'retirement_debug.log')
+
+    # Clear any existing handlers to avoid conflicts
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),  # Console output
+            logging.FileHandler(log_file_path, mode='a')  # Append mode to preserve logs
+        ],
+        force=True  # Force reconfiguration
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("=== LOGGING INITIALIZED ===")
+    logger.info(f"Log file location: {log_file_path}")
+else:
+    # Create no-op logger when debugging is disabled
+    logger = logging.getLogger(__name__)
+    logger.disabled = True
 
 """
 Multi-Currency Retirement Needs Calculator (Streamlit)
@@ -417,11 +448,45 @@ def main():
     st.markdown("""Estimate how much you need to have saved to retire comfortably, based on
 real‑world spending patterns and country-specific social security systems.""")
     
+    # Test logging immediately when app starts
+    logger.info("=== APP START ===")
+    logger.info(f"Session state keys: {list(st.session_state.keys())}")
+    
     # Initialize session state for wealth accumulator
     if 'savings_accounts' not in st.session_state:
         st.session_state.savings_accounts = []
     if 'planned_expenses' not in st.session_state:
         st.session_state.planned_expenses = []
+    
+    # Initialize session state for core input widgets
+    if 'monthly_spend' not in st.session_state:
+        st.session_state.monthly_spend = None
+    if 'user_age' not in st.session_state:
+        st.session_state.user_age = 30
+    if 'spouse' not in st.session_state:
+        st.session_state.spouse = True
+    if 'ret_age' not in st.session_state:
+        st.session_state.ret_age = 65
+    if 'ss_start' not in st.session_state:
+        st.session_state.ss_start = None
+    if 'base_ss' not in st.session_state:
+        st.session_state.base_ss = None
+    
+    # Initialize session state for assumption sliders
+    if 'discount_rate' not in st.session_state:
+        st.session_state.discount_rate = None
+    if 'inflation_rate' not in st.session_state:
+        st.session_state.inflation_rate = 0.02
+    if 'early_decline' not in st.session_state:
+        st.session_state.early_decline = None
+    if 'couple_decline' not in st.session_state:
+        st.session_state.couple_decline = None
+    if 'single_decline' not in st.session_state:
+        st.session_state.single_decline = None
+    
+    # Initialize session state for country tracking
+    if 'selected_country' not in st.session_state:
+        st.session_state.selected_country = "USA"
 
     with st.sidebar:
         st.header("🌍 Country & Currency")
@@ -434,9 +499,28 @@ real‑world spending patterns and country-specific social security systems.""")
             help="This determines currency, social security rules, and default values"
         )
         
+        # Detect country change
+        if selected_country != st.session_state.selected_country:
+            # Country changed - update currency-specific values
+            country_changed = True
+            st.session_state.selected_country = selected_country
+        else:
+            country_changed = False
+        
         config = COUNTRY_CONFIG[selected_country]
         currency_symbol = config["symbol"]
         ss_name = config["ss_name"]
+        
+        # Update currency-specific values when country changes
+        if country_changed:
+            # Update monthly spend to new country default
+            st.session_state.monthly_spend = config["default_monthly_spend"]
+            
+            # Update social security benefit to new country default  
+            st.session_state.base_ss = config["default_ss_benefit"]
+            
+            # Show notification to user
+            st.success(f"✅ Updated values for {config['currency']} currency")
         
         st.info(f"**Currency:** {config['currency']} ({currency_symbol})\n\n"
                 f"**Social Security:** {ss_name}\n\n"
@@ -448,10 +532,12 @@ real‑world spending patterns and country-specific social security systems.""")
             "Your current age",
             min_value=18,
             max_value=80,
-            value=30,
+            value=st.session_state.user_age,
             step=1,
-            help="Your current age - used to calculate inflation impact from now until retirement"
+            help="Your current age - used to calculate inflation impact from now until retirement",
+            key="user_age_input"
         )
+        st.session_state.user_age = user_age
 
         st.header("💰 Wealth Accumulator")
         
@@ -604,19 +690,24 @@ real‑world spending patterns and country-specific social security systems.""")
         # Use country-specific defaults
         monthly_spend = st.number_input(
             f"Current household monthly spend ({currency_symbol})", 
-            value=config["default_monthly_spend"], 
+            value=st.session_state.monthly_spend or config["default_monthly_spend"], 
             step=100,
-            help=f"Your current monthly household expenses in {config['currency']}"
+            help=f"Your current monthly household expenses in {config['currency']}",
+            key="monthly_spend_input"
         )
+        st.session_state.monthly_spend = monthly_spend
         
-        spouse = st.checkbox("Include spouse?", value=True)
+        spouse = st.checkbox("Include spouse?", value=st.session_state.spouse, key="spouse_input")
+        st.session_state.spouse = spouse
         
         ret_age = st.selectbox(
             "Desired retirement age", 
             [55, 60, 62, 65, 67, 70], 
-            index=3,
-            help="Age when you want to stop working and start drawing retirement funds"
+            index=[55, 60, 62, 65, 67, 70].index(st.session_state.ret_age),
+            help="Age when you want to stop working and start drawing retirement funds",
+            key="ret_age_input"
         )
+        st.session_state.ret_age = ret_age
         
         # Social Security claiming age with country-specific limits
         min_ss_age = config["ss_early_age"]
@@ -627,16 +718,20 @@ real‑world spending patterns and country-specific social security systems.""")
             f"Start {ss_name} at age", 
             min_value=min_ss_age, 
             max_value=max_ss_age, 
-            value=default_ss_age,
-            help=f"Age when you claim {ss_name} benefits. Earlier = lower benefits, later = higher benefits"
+            value=st.session_state.ss_start or default_ss_age,
+            help=f"Age when you claim {ss_name} benefits. Earlier = lower benefits, later = higher benefits",
+            key="ss_start_input"
         )
+        st.session_state.ss_start = ss_start
         
         base_ss = st.number_input(
             f"Estimated individual {ss_name} benefit at age {config['ss_full_age']} ({currency_symbol}/month)", 
-            value=config["default_ss_benefit"], 
+            value=st.session_state.base_ss or config["default_ss_benefit"], 
             step=50,
-            help=f"Your estimated monthly {ss_name} benefit at full retirement age"
+            help=f"Your estimated monthly {ss_name} benefit at full retirement age",
+            key="base_ss_input"
         )
+        st.session_state.base_ss = base_ss
 
         # Show country-specific information
         st.header("📊 Country Details")
@@ -685,21 +780,25 @@ real‑world spending patterns and country-specific social security systems.""")
                 "Real investment return during retirement",
                 min_value=0.03,
                 max_value=0.08,
-                value=preset["discount_rate"],
+                value=st.session_state.discount_rate or preset["discount_rate"],
                 step=0.005,
                 format="%.1f%%",
-                help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+"
+                help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+",
+                key="discount_rate_slider"
             )
+            st.session_state.discount_rate = discount_rate
             
             inflation_rate = st.slider(
                 "Expected inflation rate", 
                 min_value=0.0, 
                 max_value=0.08, 
-                value=0.02,
+                value=st.session_state.inflation_rate,
                 step=0.001,
                 format="%.1f%%",
-                help="Expected annual inflation rate from now until retirement. This will increase your spending needs over time."
+                help="Expected annual inflation rate from now until retirement. This will increase your spending needs over time.",
+                key="inflation_rate_slider"
             )
+            st.session_state.inflation_rate = inflation_rate
             
             st.subheader("Spending Decline Rates")
             st.caption("Research shows spending typically declines in retirement, but rates vary widely.")
@@ -708,31 +807,37 @@ real‑world spending patterns and country-specific social security systems.""")
                 "Spending decline ages 62-64 (% per year)",
                 min_value=0.0,
                 max_value=0.02,
-                value=preset["early_decline"],
+                value=st.session_state.early_decline or preset["early_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Transition from 'go-go' to 'slow-go' years"
+                help="Transition from 'go-go' to 'slow-go' years",
+                key="early_decline_slider"
             )
+            st.session_state.early_decline = early_decline
             
             couple_decline = st.slider(
                 "Couple spending decline after 65 (% per year)",
                 min_value=0.005,
                 max_value=0.03,
-                value=preset["couple_decline"],
+                value=st.session_state.couple_decline or preset["couple_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Annual spending decline for couples in later retirement"
+                help="Annual spending decline for couples in later retirement",
+                key="couple_decline_slider"
             )
+            st.session_state.couple_decline = couple_decline
             
             single_decline = st.slider(
                 "Single spending decline after 65 (% per year)",
                 min_value=0.005,
                 max_value=0.025,
-                value=preset["single_decline"],
+                value=st.session_state.single_decline or preset["single_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Annual spending decline for singles in later retirement"
+                help="Annual spending decline for singles in later retirement",
+                key="single_decline_slider"
             )
+            st.session_state.single_decline = single_decline
 
     # Validate user age is less than retirement age
     if user_age >= ret_age:
@@ -743,6 +848,16 @@ real‑world spending patterns and country-specific social security systems.""")
     years_to_retirement = ret_age - user_age
     inflated_monthly_spend = monthly_spend * (1 + inflation_rate) ** years_to_retirement
     
+    # Log all components of inflation calculation
+    logger.info("=== INFLATION CALCULATION COMPONENTS ===")
+    logger.info(f"monthly_spend (raw): {monthly_spend}")
+    logger.info(f"inflation_rate: {inflation_rate}")
+    logger.info(f"user_age: {user_age}")
+    logger.info(f"ret_age: {ret_age}")
+    logger.info(f"years_to_retirement: {years_to_retirement}")
+    logger.info(f"inflation_multiplier: {(1 + inflation_rate) ** years_to_retirement}")
+    logger.info(f"inflated_monthly_spend: {inflated_monthly_spend}")
+    
     # Calculate wealth accumulation from savings accounts and expenses
     wealth_df = pd.DataFrame()
     wealth_at_retirement = 0
@@ -752,13 +867,49 @@ real‑world spending patterns and country-specific social security systems.""")
         wealth_df = apply_planned_expenses(wealth_df, st.session_state.planned_expenses, user_age, inflation_rate)
         wealth_at_retirement = wealth_df[wealth_df['Age'] == ret_age]['Wealth_Balance'].iloc[0] if len(wealth_df) > 0 else 0
     
+    # Log wealth calculation results
+    logger.info("=== WEALTH CALCULATION ===")
+    logger.info(f"Savings accounts: {len(st.session_state.savings_accounts)}")
+    for i, acc in enumerate(st.session_state.savings_accounts):
+        logger.info(f"  Account {i}: {acc['name']} - Amount: {acc['amount']}, ROI: {acc['roi']}")
+    logger.info(f"Planned expenses: {len(st.session_state.planned_expenses)}")
+    for i, exp in enumerate(st.session_state.planned_expenses):
+        logger.info(f"  Expense {i}: {exp['name']} - Amount: {exp['amount']}, Age: {exp['age']}")
+    logger.info(f"wealth_at_retirement: {wealth_at_retirement:,.2f}")
+    
     # Calculations with custom parameters (using inflation-adjusted spending)
+    # Log spending and social security inputs
+    logger.info("=== SPENDING/SS CALCULATION INPUTS ===")
+    logger.info(f"inflated_monthly_spend: {inflated_monthly_spend}")
+    logger.info(f"spouse: {spouse}")
+    logger.info(f"early_decline: {early_decline}")
+    logger.info(f"couple_decline: {couple_decline}")
+    logger.info(f"single_decline: {single_decline}")
+    logger.info(f"ss_start: {ss_start}")
+    logger.info(f"base_ss: {base_ss}")
+    
     df = project_spending(inflated_monthly_spend, spouse, ret_age, currency_symbol, early_decline, couple_decline, single_decline)
     df = add_social_security(df, ss_start, base_ss, spouse, config)
+    
+    # Log inputs to nest_egg calculation
+    logger.info("=== NEST EGG CALCULATION INPUTS ===")
+    logger.info(f"ret_age: {ret_age}")
+    logger.info(f"discount_rate: {discount_rate}")
+    logger.info(f"df shape: {df.shape}")
+    logger.info(f"df.head(): {df.head().to_dict()}")
+    
     nest_egg = pv_of_needs(df, ret_age, discount_rate)
     
     # Calculate net retirement need accounting for accumulated wealth
     retirement_analysis = calculate_net_retirement_need(nest_egg, wealth_at_retirement)
+    
+    # Log retirement analysis results
+    logger.info("=== RETIREMENT ANALYSIS ===")
+    logger.info(f"nest_egg: {nest_egg:,.2f}")
+    logger.info(f"additional_needed: {retirement_analysis['additional_needed']:,.2f}")
+    logger.info(f"wealth_contribution: {retirement_analysis['wealth_contribution']:,.2f}")
+    logger.info(f"total_required: {retirement_analysis['total_required']:,.2f}")
+    logger.info(f"UI condition (wealth_at_retirement > 0): {wealth_at_retirement > 0}")
     
     # Add savings balance calculation (using total required nest egg)
     df = calculate_savings_balance(df, nest_egg, discount_rate)
@@ -772,6 +923,10 @@ real‑world spending patterns and country-specific social security systems.""")
     with col1:
         # Show different metrics based on whether user has wealth accumulation
         if wealth_at_retirement > 0:
+            # Log which UI branch is shown
+            logger.info("=== UI DISPLAY: Wealth Accumulation Branch ===")
+            logger.info(f"Displaying 'Additional savings needed': {retirement_analysis['additional_needed']:,.2f}")
+            logger.info(f"Displaying 'Total retirement need': {retirement_analysis['total_required']:,.2f}")
             st.metric(
                 label=f"**Additional savings needed by age {ret_age}**", 
                 value=format_currency(retirement_analysis['additional_needed'], currency_symbol),
@@ -790,6 +945,9 @@ real‑world spending patterns and country-specific social security systems.""")
                 help="Total nest egg required before considering existing wealth"
             )
         else:
+            # Log which UI branch is shown
+            logger.info("=== UI DISPLAY: Basic Branch ===")
+            logger.info(f"Displaying 'Required nest-egg': {nest_egg:,.2f}")
             st.metric(
                 label=f"**Required nest‑egg at age {ret_age}**", 
                 value=format_currency(nest_egg, currency_symbol),
