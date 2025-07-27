@@ -399,6 +399,10 @@ def calculate_wealth_accumulation(savings_accounts: list, user_age: int, ret_age
         total_wealth = 0
         
         for account in savings_accounts:
+            # Skip disabled accounts
+            if not account.get('enabled', True):
+                continue
+                
             account_value = 0
             
             # Calculate growth from initial amount
@@ -430,6 +434,10 @@ def apply_planned_expenses(wealth_df: pd.DataFrame, planned_expenses: list, user
     wealth_df = wealth_df.copy()
     
     for expense in planned_expenses:
+        # Skip disabled expenses
+        if not expense.get('enabled', True):
+            continue
+            
         expense_age = expense['age']
         if user_age <= expense_age <= wealth_df['Age'].max():
             # Apply inflation to expense amount
@@ -561,7 +569,7 @@ real‑world spending patterns and country-specific social security systems.""")
         st.subheader("💳 Savings Accounts")
         
         # Add new savings account
-        col1, col2 = st.columns([5, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             new_account_name = st.text_input("Account name", placeholder="e.g., 401k, IRA, Savings", key="new_account_name")
         with col2:
@@ -572,7 +580,8 @@ real‑world spending patterns and country-specific social security systems.""")
                         'name': new_account_name,
                         'amount': 0,
                         'roi': 0.04,
-                        'monthly_deposit': 0
+                        'monthly_deposit': 0,
+                        'enabled': True
                     })
                     st.rerun()
         
@@ -580,14 +589,21 @@ real‑world spending patterns and country-specific social security systems.""")
         accounts_to_remove = []
         for i, account in enumerate(st.session_state.savings_accounts):
             with st.container():
-                # Row 1: Account name and remove button (aligned with Add button)
-                col1, col2 = st.columns([5, 1])
+                # Row 1: Account name, enable/disable toggle, and remove button
+                col1, col2, col3 = st.columns([4, 1, 1])
                 
                 with col1:
                     st.text(f"🏦 {account['name']}")
                 
                 with col2:
-                    if st.button("❌", key=f"remove_account_{i}", help="Remove account"):
+                    # Enable/disable toggle
+                    toggle_text = "✅" if account.get('enabled', True) else "❌"
+                    if st.button(toggle_text, key=f"toggle_account_{i}", help="Enable/disable account"):
+                        account['enabled'] = not account.get('enabled', True)
+                        st.rerun()
+                
+                with col3:
+                    if st.button("🗑️", key=f"remove_account_{i}", help="Remove account"):
                         accounts_to_remove.append(i)
                 
                 # Row 2: Amount input and ROI controls
@@ -649,7 +665,7 @@ real‑world spending patterns and country-specific social security systems.""")
         st.subheader("🏠 Planned Expenses")
         
         # Add new planned expense
-        col1, col2 = st.columns([5, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             new_expense_name = st.text_input("Expense name", placeholder="e.g., Wedding, House, Car", key="new_expense_name")
         with col2:
@@ -659,7 +675,8 @@ real‑world spending patterns and country-specific social security systems.""")
                     st.session_state.planned_expenses.append({
                         'name': new_expense_name,
                         'amount': 0,
-                        'age': user_age + 5
+                        'age': user_age + 5,
+                        'enabled': True
                     })
                     st.rerun()
         
@@ -667,14 +684,21 @@ real‑world spending patterns and country-specific social security systems.""")
         expenses_to_remove = []
         for i, expense in enumerate(st.session_state.planned_expenses):
             with st.container():
-                # Row 1: Expense name and remove button (aligned with Add button)
-                col1, col2 = st.columns([5, 1])
+                # Row 1: Expense name, enable/disable toggle, and remove button
+                col1, col2, col3 = st.columns([4, 1, 1])
                 
                 with col1:
                     st.text(f"💸 {expense['name']}")
                 
                 with col2:
-                    if st.button("❌", key=f"remove_expense_{i}", help="Remove expense"):
+                    # Enable/disable toggle
+                    toggle_text = "✅" if expense.get('enabled', True) else "❌"
+                    if st.button(toggle_text, key=f"toggle_expense_{i}", help="Enable/disable expense"):
+                        expense['enabled'] = not expense.get('enabled', True)
+                        st.rerun()
+                
+                with col3:
+                    if st.button("🗑️", key=f"remove_expense_{i}", help="Remove expense"):
                         expenses_to_remove.append(i)
                 
                 # Row 2: Amount input and age input
@@ -1048,8 +1072,8 @@ real‑world spending patterns and country-specific social security systems.""")
         # Show wealth accumulation summary
         if st.session_state.savings_accounts or st.session_state.planned_expenses:
             st.subheader("💰 Wealth Summary")
-            current_total = sum(account['amount'] for account in st.session_state.savings_accounts)
-            total_expenses = sum(expense['amount'] for expense in st.session_state.planned_expenses)
+            current_total = sum(account['amount'] for account in st.session_state.savings_accounts if account.get('enabled', True))
+            total_expenses = sum(expense['amount'] for expense in st.session_state.planned_expenses if expense.get('enabled', True))
             st.text(f"• Current savings: {format_currency(current_total, currency_symbol)}")
             st.text(f"• Planned expenses: {format_currency(total_expenses, currency_symbol)}")
             st.text(f"• Wealth at retirement: {format_currency(wealth_at_retirement, currency_symbol)}")
