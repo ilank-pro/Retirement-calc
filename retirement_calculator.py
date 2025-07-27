@@ -226,7 +226,7 @@ def create_retirement_chart(df: pd.DataFrame, currency: str) -> plt.Figure:
     return fig
 
 
-def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.Figure:
+def create_interactive_retirement_chart(df: pd.DataFrame, currency: str, wealth_df: pd.DataFrame = None) -> go.Figure:
     """Create an interactive Plotly chart with dual y-axes and hover tooltips for retirement projection."""
     # Create subplot with secondary y-axis
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -292,6 +292,24 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str) -> go.F
         secondary_y=True,
     )
     
+    # Add wealth accumulation trace (golden line) if provided
+    if wealth_df is not None and not wealth_df.empty:
+        wealth_ages = wealth_df['Age']
+        wealth_balance = wealth_df['Wealth_Balance'] / 1000
+        
+        fig.add_trace(
+            go.Scatter(
+                x=wealth_ages,
+                y=wealth_balance,
+                mode='lines',
+                name='Wealth Accumulation',
+                line=dict(color='gold', width=3),
+                hovertemplate='Wealth Accumulation: %{customdata[0]}<extra></extra>',
+                customdata=[[f'{currency}{val*1000:,.0f}'] for val in wealth_balance]
+            ),
+            secondary_y=True,
+        )
+    
     # Update layout
     fig.update_layout(
         title='Annual Financial Projection',
@@ -341,11 +359,69 @@ SCENARIO_PRESETS = {
 }
 
 
+def calculate_wealth_accumulation(savings_accounts: list, user_age: int, ret_age: int, inflation_rate: float) -> pd.DataFrame:
+    """Calculate wealth accumulation from savings accounts over time."""
+    records = []
+    
+    for age in range(user_age, ret_age + 1):
+        years_elapsed = age - user_age
+        total_wealth = 0
+        
+        for account in savings_accounts:
+            if account['amount'] > 0:
+                # Apply compound growth with account's ROI
+                account_value = account['amount'] * (1 + account['roi']) ** years_elapsed
+                total_wealth += account_value
+        
+        records.append({"Age": age, "Wealth_Balance": total_wealth})
+    
+    return pd.DataFrame(records)
+
+
+def apply_planned_expenses(wealth_df: pd.DataFrame, planned_expenses: list, user_age: int, inflation_rate: float) -> pd.DataFrame:
+    """Apply planned expenses at their scheduled ages, accounting for inflation."""
+    wealth_df = wealth_df.copy()
+    
+    for expense in planned_expenses:
+        expense_age = expense['age']
+        if user_age <= expense_age <= wealth_df['Age'].max():
+            # Apply inflation to expense amount
+            years_to_expense = expense_age - user_age
+            inflated_expense = expense['amount'] * (1 + inflation_rate) ** years_to_expense
+            
+            # Subtract expense from wealth at that age and all subsequent ages
+            mask = wealth_df['Age'] >= expense_age
+            wealth_df.loc[mask, 'Wealth_Balance'] -= inflated_expense
+            
+            # Ensure wealth doesn't go negative
+            wealth_df['Wealth_Balance'] = wealth_df['Wealth_Balance'].clip(lower=0)
+    
+    return wealth_df
+
+
+def calculate_net_retirement_need(required_nest_egg: float, wealth_at_retirement: float) -> dict:
+    """Calculate additional savings needed after accounting for accumulated wealth."""
+    additional_needed = max(0, required_nest_egg - wealth_at_retirement)
+    wealth_contribution = min(required_nest_egg, wealth_at_retirement)
+    
+    return {
+        'additional_needed': additional_needed,
+        'wealth_contribution': wealth_contribution,
+        'total_required': required_nest_egg
+    }
+
+
 def main():
     st.set_page_config(page_title="Multi-Currency Retirement Calculator", layout="wide")
     st.title("💰 Multi-Currency Retirement Needs Calculator")
     st.markdown("""Estimate how much you need to have saved to retire comfortably, based on
 real‑world spending patterns and country-specific social security systems.""")
+    
+    # Initialize session state for wealth accumulator
+    if 'savings_accounts' not in st.session_state:
+        st.session_state.savings_accounts = []
+    if 'planned_expenses' not in st.session_state:
+        st.session_state.planned_expenses = []
 
     with st.sidebar:
         st.header("🌍 Country & Currency")
@@ -376,6 +452,134 @@ real‑world spending patterns and country-specific social security systems.""")
             step=1,
             help="Your current age - used to calculate inflation impact from now until retirement"
         )
+
+        st.header("💰 Wealth Accumulator")
+        
+        # Savings Accounts Section
+        st.subheader("💳 Savings Accounts")
+        
+        # Add new savings account
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            new_account_name = st.text_input("Account name", placeholder="e.g., 401k, IRA, Savings", key="new_account_name")
+        with col2:
+            st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)  # Align button with input bottom
+            if st.button("➕", help="Add account"):
+                if new_account_name:
+                    st.session_state.savings_accounts.append({
+                        'name': new_account_name,
+                        'amount': 0,
+                        'roi': 0.04
+                    })
+                    st.rerun()
+        
+        # Display existing savings accounts
+        accounts_to_remove = []
+        for i, account in enumerate(st.session_state.savings_accounts):
+            with st.container():
+                # Row 1: Account name and remove button
+                col1, col2 = st.columns([6, 1])
+                
+                with col1:
+                    st.text(f"🏦 {account['name']}")
+                
+                with col2:
+                    if st.button("❌", key=f"remove_account_{i}", help="Remove account"):
+                        accounts_to_remove.append(i)
+                
+                # Row 2: Amount input and ROI controls
+                col1, col2 = st.columns([3, 2])
+                
+                with col1:
+                    account['amount'] = st.number_input(
+                        "Amount",
+                        value=account['amount'],
+                        step=1000,
+                        key=f"account_amount_{i}",
+                        label_visibility="collapsed",
+                        format="%d"
+                    )
+                    # Display currency symbol below the input
+                    st.caption(f"{currency_symbol}{account['amount']:,}")
+                
+                with col2:
+                    # ROI input control (matching amount input style)
+                    account['roi'] = st.number_input(
+                        "ROI %",
+                        min_value=0.0,
+                        max_value=10.0,
+                        value=account['roi'] * 100,
+                        step=0.1,
+                        format="%.1f",
+                        key=f"account_roi_{i}",
+                        label_visibility="collapsed"
+                    ) / 100
+                    # Display ROI caption below the input (matching amount style)
+                    st.caption(f"ROI: {account['roi']*100:.1f}%")
+                        
+                st.divider()
+        
+        # Remove accounts marked for deletion
+        for i in reversed(accounts_to_remove):
+            del st.session_state.savings_accounts[i]
+            st.rerun()
+        
+        # Planned Expenses Section
+        st.subheader("🏠 Planned Expenses")
+        
+        # Add new planned expense
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            new_expense_name = st.text_input("Expense name", placeholder="e.g., Wedding, House, Car", key="new_expense_name")
+        with col2:
+            if st.button("➕", help="Add expense", key="add_expense_btn"):
+                if new_expense_name:
+                    st.session_state.planned_expenses.append({
+                        'name': new_expense_name,
+                        'amount': 0,
+                        'age': user_age + 5
+                    })
+                    st.rerun()
+        
+        # Display existing planned expenses
+        expenses_to_remove = []
+        for i, expense in enumerate(st.session_state.planned_expenses):
+            with st.container():
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                
+                with col1:
+                    st.text(f"💸 {expense['name']}")
+                
+                with col2:
+                    expense['amount'] = st.number_input(
+                        f"Amount ({currency_symbol})",
+                        value=expense['amount'],
+                        step=1000,
+                        key=f"expense_amount_{i}",
+                        label_visibility="collapsed"
+                    )
+                
+                with col3:
+                    expense['age'] = st.number_input(
+                        "Age",
+                        min_value=user_age,
+                        max_value=80,
+                        value=expense['age'],
+                        step=1,
+                        key=f"expense_age_{i}",
+                        label_visibility="collapsed"
+                    )
+                
+                with col4:
+                    if st.button("🗑️", key=f"remove_expense_{i}", help="Remove expense"):
+                        expenses_to_remove.append(i)
+                        
+                st.divider()
+        
+        # Remove expenses marked for deletion
+        for i in reversed(expenses_to_remove):
+            del st.session_state.planned_expenses[i]
+            st.rerun()
 
         st.header("💼 Your Financial Details")
         
@@ -521,12 +725,24 @@ real‑world spending patterns and country-specific social security systems.""")
     years_to_retirement = ret_age - user_age
     inflated_monthly_spend = monthly_spend * (1 + inflation_rate) ** years_to_retirement
     
+    # Calculate wealth accumulation from savings accounts and expenses
+    wealth_df = pd.DataFrame()
+    wealth_at_retirement = 0
+    
+    if st.session_state.savings_accounts:
+        wealth_df = calculate_wealth_accumulation(st.session_state.savings_accounts, user_age, ret_age, inflation_rate)
+        wealth_df = apply_planned_expenses(wealth_df, st.session_state.planned_expenses, user_age, inflation_rate)
+        wealth_at_retirement = wealth_df[wealth_df['Age'] == ret_age]['Wealth_Balance'].iloc[0] if len(wealth_df) > 0 else 0
+    
     # Calculations with custom parameters (using inflation-adjusted spending)
     df = project_spending(inflated_monthly_spend, spouse, ret_age, currency_symbol, early_decline, couple_decline, single_decline)
     df = add_social_security(df, ss_start, base_ss, spouse, config)
     nest_egg = pv_of_needs(df, ret_age, discount_rate)
     
-    # Add savings balance calculation
+    # Calculate net retirement need accounting for accumulated wealth
+    retirement_analysis = calculate_net_retirement_need(nest_egg, wealth_at_retirement)
+    
+    # Add savings balance calculation (using total required nest egg)
     df = calculate_savings_balance(df, nest_egg, discount_rate)
     
     # Calculate 4% rule comparison (using inflation-adjusted spending)
@@ -536,11 +752,31 @@ real‑world spending patterns and country-specific social security systems.""")
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.metric(
-            label=f"**Required nest‑egg at age {ret_age}**", 
-            value=format_currency(nest_egg, currency_symbol),
-            help="Present value of your retirement needs minus Social Security benefits"
-        )
+        # Show different metrics based on whether user has wealth accumulation
+        if wealth_at_retirement > 0:
+            st.metric(
+                label=f"**Additional savings needed by age {ret_age}**", 
+                value=format_currency(retirement_analysis['additional_needed'], currency_symbol),
+                help="Additional savings needed after accounting for your current wealth accumulation"
+            )
+            
+            st.metric(
+                label=f"**Wealth contribution**", 
+                value=format_currency(retirement_analysis['wealth_contribution'], currency_symbol),
+                help="Amount your current savings and planned expenses will contribute toward retirement"
+            )
+            
+            st.metric(
+                label=f"**Total retirement need**", 
+                value=format_currency(retirement_analysis['total_required'], currency_symbol),
+                help="Total nest egg required before considering existing wealth"
+            )
+        else:
+            st.metric(
+                label=f"**Required nest‑egg at age {ret_age}**", 
+                value=format_currency(nest_egg, currency_symbol),
+                help="Present value of your retirement needs minus Social Security benefits"
+            )
         
         # 4% rule comparison
         comparison_ratio = nest_egg / four_percent_rule if four_percent_rule > 0 else 0
@@ -596,14 +832,29 @@ real‑world spending patterns and country-specific social security systems.""")
             st.text(f"• Couple decline (65+): {couple_decline:.2%}/year")
         else:
             st.text(f"• Single decline (65+): {single_decline:.2%}/year")
+        
+        # Show wealth accumulation summary
+        if st.session_state.savings_accounts or st.session_state.planned_expenses:
+            st.subheader("💰 Wealth Summary")
+            current_total = sum(account['amount'] for account in st.session_state.savings_accounts)
+            total_expenses = sum(expense['amount'] for expense in st.session_state.planned_expenses)
+            st.text(f"• Current savings: {format_currency(current_total, currency_symbol)}")
+            st.text(f"• Planned expenses: {format_currency(total_expenses, currency_symbol)}")
+            st.text(f"• Wealth at retirement: {format_currency(wealth_at_retirement, currency_symbol)}")
+            if wealth_at_retirement > 0:
+                coverage_pct = (wealth_at_retirement / nest_egg * 100) if nest_egg > 0 else 0
+                st.text(f"• Retirement coverage: {coverage_pct:.1f}%")
 
     with col2:
         # Create interactive dual-axis chart with hover tooltips
         st.subheader("Annual Financial Projection")
-        st.caption("📊 **Interactive Chart**: Hover over any point to see detailed values | **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green)**")
+        if wealth_df is not None and not wealth_df.empty:
+            st.caption("📊 **Interactive Chart**: Hover over any point to see detailed values | **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green), Wealth Accumulation (gold)**")
+        else:
+            st.caption("📊 **Interactive Chart**: Hover over any point to see detailed values | **Left axis**: Gross Spending (blue), Social Security (orange), Net Need (red) | **Right axis**: **Savings Balance (green)**")
         
         # Generate and display the interactive chart
-        fig = create_interactive_retirement_chart(df, config['symbol'])
+        fig = create_interactive_retirement_chart(df, config['symbol'], wealth_df)
         st.plotly_chart(fig, use_container_width=True)
         
         # Add interpretation help
