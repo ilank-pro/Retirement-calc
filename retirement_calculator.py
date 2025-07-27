@@ -6,6 +6,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import logging
 import sys
+from datetime import datetime
+from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.lineplots import LinePlot
+from reportlab.graphics.charts.legends import Legend
 
 # Debug logging control - set to True to enable detailed logging
 DEBUG_LOGGING = False  # Default to False for production use
@@ -255,6 +265,251 @@ def create_retirement_chart(df: pd.DataFrame, currency: str) -> plt.Figure:
     fig.tight_layout()
     
     return fig
+
+
+def export_chart_for_pdf(df: pd.DataFrame, currency: str, wealth_df: pd.DataFrame = None) -> BytesIO:
+    """Create a matplotlib chart optimized for PDF export."""
+    # Create the chart using existing function
+    fig = create_retirement_chart(df, currency)
+    
+    # Save to BytesIO for embedding in PDF
+    img_buffer = BytesIO()
+    fig.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
+    img_buffer.seek(0)
+    plt.close(fig)  # Clean up memory
+    
+    return img_buffer
+
+
+def generate_pdf_report(
+    retirement_analysis: dict,
+    wealth_at_retirement: float,
+    nest_egg: float,
+    df: pd.DataFrame,
+    display_df: pd.DataFrame,
+    config: dict,
+    user_age: int,
+    ret_age: int,
+    spouse: bool,
+    monthly_spend: float,
+    ss_start: int,
+    base_ss: float,
+    discount_rate: float,
+    inflation_rate: float,
+    early_decline: float,
+    couple_decline: float,
+    single_decline: float,
+    years_to_retirement: int,
+    savings_accounts: list,
+    planned_expenses: list,
+    scenario: str,
+    wealth_df: pd.DataFrame = None
+) -> bytes:
+    """Generate a comprehensive PDF report of the retirement analysis."""
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72,
+                           topMargin=72, bottomMargin=18)
+    
+    # Get styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.navy,
+        spaceAfter=30,
+        alignment=1  # Center alignment
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        textColor=colors.darkblue,
+        spaceAfter=12
+    )
+    
+    # Build the document content
+    story = []
+    
+    # Title and header
+    story.append(Paragraph("Multi-Currency Retirement Needs Calculator", title_style))
+    story.append(Paragraph(f"Analysis Report - {config['currency']} ({config['symbol']})", styles['Heading2']))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", styles['Normal']))
+    story.append(Spacer(1, 20))
+    
+    # Personal Information Section
+    story.append(Paragraph("Personal Information", heading_style))
+    personal_data = [
+        ['Current Age:', f'{user_age} years'],
+        ['Desired Retirement Age:', f'{ret_age} years'],
+        ['Years to Retirement:', f'{years_to_retirement} years'],
+        ['Spouse Included:', 'Yes' if spouse else 'No'],
+        ['Country/Region:', f"{config.get('currency', 'N/A')} ({config.get('symbol', 'N/A')})"],
+        ['Planning Scenario:', scenario]
+    ]
+    
+    personal_table = Table(personal_data, colWidths=[2.5*inch, 2.5*inch])
+    personal_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(personal_table)
+    story.append(Spacer(1, 20))
+    
+    # Key Metrics Section
+    story.append(Paragraph("Key Financial Metrics", heading_style))
+    
+    # Format currency values
+    currency_symbol = config['symbol']
+    
+    if wealth_at_retirement > 0:
+        metrics_data = [
+            ['Additional Savings Needed:', f"{currency_symbol}{retirement_analysis['additional_needed']:,.0f}"],
+            ['Total Expected Savings:', f"{currency_symbol}{wealth_at_retirement:,.0f}"],
+            ['Total Retirement Need:', f"{currency_symbol}{retirement_analysis['total_required']:,.0f}"],
+            ['Current Monthly Spending:', f"{currency_symbol}{monthly_spend:,.0f}/month"]
+        ]
+    else:
+        metrics_data = [
+            ['Required Nest Egg:', f"{currency_symbol}{nest_egg:,.0f}"],
+            ['Current Monthly Spending:', f"{currency_symbol}{monthly_spend:,.0f}/month"]
+        ]
+    
+    metrics_table = Table(metrics_data, colWidths=[3*inch, 2*inch])
+    metrics_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.lightblue),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(metrics_table)
+    story.append(Spacer(1, 20))
+    
+    # Assumptions Section
+    story.append(Paragraph("Planning Assumptions", heading_style))
+    assumptions_data = [
+        ['Investment Return (Real):', f'{discount_rate:.1%}'],
+        ['Inflation Rate:', f'{inflation_rate:.1%}/year'],
+        ['Early Spending Decline (62-64):', f'{early_decline:.2%}/year'],
+        ['Later Spending Decline (65+):', f'{(couple_decline if spouse else single_decline):.2%}/year'],
+        ['Social Security Start Age:', f'{ss_start} years'],
+        ['SS Monthly Benefit (at FRA):', f'{currency_symbol}{base_ss:,.0f}/month']
+    ]
+    
+    assumptions_table = Table(assumptions_data, colWidths=[3*inch, 2*inch])
+    assumptions_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.lightyellow),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    story.append(assumptions_table)
+    story.append(Spacer(1, 20))
+    
+    # Wealth Summary (if applicable)
+    if savings_accounts or planned_expenses:
+        story.append(Paragraph("Wealth Accumulation Summary", heading_style))
+        
+        enabled_accounts = [acc for acc in savings_accounts if acc.get('enabled', True)]
+        enabled_expenses = [exp for exp in planned_expenses if exp.get('enabled', True)]
+        
+        if enabled_accounts:
+            story.append(Paragraph("Savings Accounts:", styles['Heading3']))
+            account_data = [['Account Name', 'Current Amount', 'ROI', 'Monthly Deposit']]
+            for account in enabled_accounts:
+                account_data.append([
+                    account['name'],
+                    f"{currency_symbol}{account['amount']:,.0f}",
+                    f"{account['roi']:.1%}",
+                    f"{currency_symbol}{account.get('monthly_deposit', 0):,.0f}/mo"
+                ])
+            
+            accounts_table = Table(account_data, colWidths=[1.5*inch, 1.2*inch, 0.8*inch, 1.3*inch])
+            accounts_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            story.append(accounts_table)
+            story.append(Spacer(1, 12))
+        
+        if enabled_expenses:
+            story.append(Paragraph("Planned Expenses:", styles['Heading3']))
+            expense_data = [['Expense Name', 'Amount', 'Age']]
+            for expense in enabled_expenses:
+                expense_data.append([
+                    expense['name'],
+                    f"{currency_symbol}{expense['amount']:,.0f}",
+                    f"{expense['age']} years"
+                ])
+            
+            expenses_table = Table(expense_data, colWidths=[2*inch, 1.5*inch, 1.3*inch])
+            expenses_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            story.append(expenses_table)
+            story.append(Spacer(1, 20))
+    
+    # Add chart on new page
+    from reportlab.platypus import PageBreak
+    story.append(PageBreak())
+    story.append(Paragraph("Annual Financial Projection", heading_style))
+    
+    # Generate and embed chart
+    chart_buffer = export_chart_for_pdf(df, config['symbol'], wealth_df)
+    chart_img = Image(chart_buffer, width=6*inch, height=3.6*inch)
+    story.append(chart_img)
+    story.append(Spacer(1, 20))
+    
+    # Data table
+    story.append(Paragraph("Annual Spending & Income Detail (First 20 Years)", heading_style))
+    
+    # Prepare table data
+    table_data = [display_df.columns.tolist()]
+    for _, row in display_df.iterrows():
+        table_data.append(row.tolist())
+    
+    data_table = Table(table_data, colWidths=[0.6*inch, 1.1*inch, 1.1*inch, 1.0*inch, 1.1*inch])
+    data_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+    ]))
+    story.append(data_table)
+    
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    
+    return buffer.getvalue()
 
 
 def create_interactive_retirement_chart(df: pd.DataFrame, currency: str, wealth_df: pd.DataFrame = None) -> go.Figure:
@@ -1180,6 +1435,76 @@ real‑world spending patterns and country-specific social security systems.""")
             f"{(total_ss_pv / total_spending_pv * 100):.1f}%",
             help="Percentage of retirement expenses covered by Social Security"
         )
+        
+        # Export to PDF button
+        st.subheader("📄 Export Report")
+        if st.button(
+            "📄 Export to PDF",
+            help="Download a comprehensive PDF report with all assumptions, calculations, chart, and data table",
+            key="export_pdf_btn",
+            use_container_width=True
+        ):
+            try:
+                with st.spinner("Generating PDF report..."):
+                    # Determine the selected scenario
+                    current_scenario = st.session_state.get('selected_scenario', 'Moderate')
+                    
+                    # Create display_df for PDF (same as used in the main table)
+                    display_df_for_pdf = df[["Age", "Gross_Spending", "Social_Security", "Net_Need", "Savings_Balance"]].head(20).copy()
+                    
+                    # Format currency columns
+                    for col in ["Gross_Spending", "Social_Security", "Net_Need", "Savings_Balance"]:
+                        display_df_for_pdf[col] = display_df_for_pdf[col].apply(lambda x: format_currency(x, currency_symbol))
+                    
+                    # Rename columns for display
+                    display_df_for_pdf.columns = ["Age", f"Gross Spending ({config['currency']})", 
+                                                 f"{ss_name} ({config['currency']})", f"Net Need ({config['currency']})",
+                                                 f"Savings Balance ({config['currency']})"]
+                    
+                    # Generate PDF
+                    pdf_bytes = generate_pdf_report(
+                        retirement_analysis=retirement_analysis,
+                        wealth_at_retirement=wealth_at_retirement,
+                        nest_egg=nest_egg,
+                        df=df,
+                        display_df=display_df_for_pdf,
+                        config=config,
+                        user_age=user_age,
+                        ret_age=ret_age,
+                        spouse=spouse,
+                        monthly_spend=monthly_spend,
+                        ss_start=ss_start,
+                        base_ss=base_ss,
+                        discount_rate=discount_rate,
+                        inflation_rate=inflation_rate,
+                        early_decline=early_decline,
+                        couple_decline=couple_decline,
+                        single_decline=single_decline,
+                        years_to_retirement=years_to_retirement,
+                        savings_accounts=st.session_state.savings_accounts,
+                        planned_expenses=st.session_state.planned_expenses,
+                        scenario=current_scenario,
+                        wealth_df=wealth_df
+                    )
+                    
+                    # Create download button
+                    filename = f"retirement_analysis_{config['currency']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    st.download_button(
+                        label="💾 Download PDF Report",
+                        data=pdf_bytes,
+                        file_name=filename,
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                    
+                    st.success("✅ PDF report generated successfully! Click the download button above.")
+                    
+            except Exception as e:
+                st.error(
+                    f"❌ **PDF Generation Error**\n\n"
+                    f"Unable to generate PDF report. Please try again or contact support.\n\n"
+                    f"Error details: {str(e)}"
+                )
         
         # Show key assumptions being used
         st.subheader("📋 Current Assumptions")
