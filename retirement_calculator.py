@@ -466,6 +466,51 @@ def calculate_net_retirement_need(required_nest_egg: float, wealth_at_retirement
     }
 
 
+def calculate_target_monthly_spend(target_nest_egg: float, spouse: bool, ret_age: int, user_age: int, 
+                                 ss_start: int, base_ss: float, config: dict, 
+                                 inflation_rate: float, discount_rate: float,
+                                 early_decline: float, couple_decline: float, single_decline: float) -> float:
+    """Calculate the monthly spend that results in a specific nest egg target using binary search."""
+    
+    def calculate_nest_egg_for_monthly_spend(monthly_spend: float) -> float:
+        """Helper function to calculate nest egg for a given monthly spend."""
+        # Apply inflation adjustment
+        years_to_retirement = ret_age - user_age
+        inflated_monthly_spend = monthly_spend * (1 + inflation_rate) ** years_to_retirement
+        
+        # Calculate spending projections
+        df = project_spending(inflated_monthly_spend, spouse, ret_age, config['symbol'], 
+                            early_decline, couple_decline, single_decline)
+        df = add_social_security(df, ss_start, base_ss, spouse, config)
+        
+        # Calculate present value of needs
+        return pv_of_needs(df, ret_age, discount_rate)
+    
+    # Binary search bounds - reasonable monthly spending range
+    low_spend = 500.0   # $500/month minimum
+    high_spend = 50000.0  # $50,000/month maximum
+    tolerance = 100.0   # Within $100 of target
+    max_iterations = 50
+    
+    # Binary search for the target monthly spend
+    for _ in range(max_iterations):
+        mid_spend = (low_spend + high_spend) / 2
+        calculated_nest_egg = calculate_nest_egg_for_monthly_spend(mid_spend)
+        
+        # Check if we're close enough to the target
+        if abs(calculated_nest_egg - target_nest_egg) <= tolerance:
+            return mid_spend
+        
+        # Adjust search bounds
+        if calculated_nest_egg < target_nest_egg:
+            low_spend = mid_spend
+        else:
+            high_spend = mid_spend
+    
+    # Return the closest result if we didn't converge
+    return (low_spend + high_spend) / 2
+
+
 def main():
     st.set_page_config(page_title="Multi-Currency Retirement Calculator", layout="wide")
     st.title("💰 Multi-Currency Retirement Needs Calculator")
@@ -511,6 +556,10 @@ real‑world spending patterns and country-specific social security systems.""")
     # Initialize session state for country tracking
     if 'selected_country' not in st.session_state:
         st.session_state.selected_country = "USA"
+    
+    # Initialize session state for scenario tracking
+    if 'selected_scenario' not in st.session_state:
+        st.session_state.selected_scenario = "Moderate"
 
     with st.sidebar:
         st.header("🌍 Country & Currency")
@@ -750,8 +799,8 @@ real‑world spending patterns and country-specific social security systems.""")
         # Use country-specific defaults
         monthly_spend = st.number_input(
             f"Current household monthly spend ({currency_symbol})", 
-            value=st.session_state.monthly_spend or config["default_monthly_spend"], 
-            step=100,
+            value=float(st.session_state.monthly_spend or config["default_monthly_spend"]), 
+            step=100.0,
             help=f"Your current monthly household expenses in {config['currency']}",
             key="monthly_spend_input"
         )
@@ -816,18 +865,37 @@ real‑world spending patterns and country-specific social security systems.""")
         scenario = st.selectbox(
             "Planning Scenario",
             options=list(SCENARIO_PRESETS.keys()),
-            index=1,  # Default to "Moderate"
+            index=list(SCENARIO_PRESETS.keys()).index(st.session_state.selected_scenario),
             help="Choose conservative, moderate, or optimistic assumptions"
         )
+        
+        # Detect scenario change
+        if scenario != st.session_state.selected_scenario:
+            # Scenario changed - update all assumption values in session state
+            scenario_changed = True
+            st.session_state.selected_scenario = scenario
+        else:
+            scenario_changed = False
         
         preset = SCENARIO_PRESETS[scenario]
         st.info(preset["description"])
         
-        # Start with preset values
-        discount_rate = preset["discount_rate"]
-        early_decline = preset["early_decline"]
-        couple_decline = preset["couple_decline"]
-        single_decline = preset["single_decline"]
+        # Update session state values when scenario changes
+        if scenario_changed:
+            # Update all assumption values to match new preset
+            st.session_state.discount_rate = preset["discount_rate"]
+            st.session_state.early_decline = preset["early_decline"]
+            st.session_state.couple_decline = preset["couple_decline"]
+            st.session_state.single_decline = preset["single_decline"]
+            
+            # Show notification to user
+            st.success(f"✅ Updated assumptions for {scenario} scenario")
+        
+        # Use session state values (updated by scenario change or user customization)
+        discount_rate = st.session_state.discount_rate or preset["discount_rate"]
+        early_decline = st.session_state.early_decline or preset["early_decline"]
+        couple_decline = st.session_state.couple_decline or preset["couple_decline"]
+        single_decline = st.session_state.single_decline or preset["single_decline"]
         
         # Default inflation rate (can be overridden in custom adjustments)
         inflation_rate = 0.02  # 2% default
@@ -994,9 +1062,9 @@ real‑world spending patterns and country-specific social security systems.""")
             )
             
             st.metric(
-                label=f"**Wealth contribution**", 
-                value=format_currency(retirement_analysis['wealth_contribution'], currency_symbol),
-                help="Amount your current savings and planned expenses will contribute toward retirement"
+                label=f"**Total expected savings**", 
+                value=format_currency(wealth_at_retirement, currency_symbol),
+                help="Total amount your current savings and planned expenses will be worth at retirement"
             )
             
             st.metric(
@@ -1004,6 +1072,61 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=format_currency(retirement_analysis['total_required'], currency_symbol),
                 help="Total nest egg required before considering existing wealth"
             )
+            
+            # Add "Adjust to Projected Savings" button when wealth contribution exists
+            if retirement_analysis['wealth_contribution'] > 0:
+                if st.button(
+                    "🎯 Adjust to Projected Savings", 
+                    help="Automatically adjust monthly spending so your total retirement need matches your projected savings",
+                    key="adjust_to_savings_btn"
+                ):
+                    try:
+                        # Calculate target monthly spend
+                        target_monthly_spend = calculate_target_monthly_spend(
+                            target_nest_egg=wealth_at_retirement,
+                            spouse=spouse,
+                            ret_age=ret_age,
+                            user_age=user_age,
+                            ss_start=ss_start,
+                            base_ss=base_ss,
+                            config=config,
+                            inflation_rate=inflation_rate,
+                            discount_rate=discount_rate,
+                            early_decline=early_decline,
+                            couple_decline=couple_decline,
+                            single_decline=single_decline
+                        )
+                        
+                        # Validate the result is reasonable
+                        if target_monthly_spend < 100 or target_monthly_spend > 100000:
+                            st.error(
+                                f"❌ **Unable to adjust spending**\n\n"
+                                f"The calculated spending ({format_currency(target_monthly_spend, currency_symbol)}/month) "
+                                f"is outside reasonable bounds. Try adjusting your savings accounts or assumptions."
+                            )
+                        else:
+                            # Store old value for feedback
+                            old_monthly_spend = st.session_state.monthly_spend
+                            
+                            # Update session state with new monthly spend
+                            st.session_state.monthly_spend = target_monthly_spend
+                            
+                            # Show success message
+                            st.success(
+                                f"✅ **Adjusted monthly spending**\n\n"
+                                f"**From:** {format_currency(old_monthly_spend, currency_symbol)}/month\n\n"
+                                f"**To:** {format_currency(target_monthly_spend, currency_symbol)}/month\n\n"
+                                f"Your retirement needs now match your projected savings!"
+                            )
+                            
+                            # Rerun to refresh calculations
+                            st.rerun()
+                    
+                    except Exception as e:
+                        st.error(
+                            f"❌ **Calculation error**\n\n"
+                            f"Unable to calculate adjusted spending. Please check your inputs and try again."
+                        )
         else:
             # Log which UI branch is shown
             logger.info("=== UI DISPLAY: Basic Branch ===")
