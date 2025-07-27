@@ -477,8 +477,8 @@ real‑world spending patterns and country-specific social security systems.""")
         accounts_to_remove = []
         for i, account in enumerate(st.session_state.savings_accounts):
             with st.container():
-                # Row 1: Account name and remove button
-                col1, col2 = st.columns([6, 1])
+                # Row 1: Account name and remove button (aligned with Add button)
+                col1, col2 = st.columns([5, 1])
                 
                 with col1:
                     st.text(f"🏦 {account['name']}")
@@ -507,7 +507,6 @@ real‑world spending patterns and country-specific social security systems.""")
                     account['roi'] = st.number_input(
                         "ROI %",
                         min_value=0.0,
-                        max_value=10.0,
                         value=account['roi'] * 100,
                         step=0.1,
                         format="%.1f",
@@ -560,15 +559,24 @@ real‑world spending patterns and country-specific social security systems.""")
                     )
                 
                 with col3:
+                    # Auto-adjust expense age if it's in the past to prevent validation error
+                    original_age = expense['age']
+                    adjusted_expense_age = max(expense['age'], user_age)
+                    was_adjusted = adjusted_expense_age != original_age
+                    
                     expense['age'] = st.number_input(
                         "Age",
                         min_value=user_age,
                         max_value=80,
-                        value=expense['age'],
+                        value=adjusted_expense_age,
                         step=1,
                         key=f"expense_age_{i}",
                         label_visibility="collapsed"
                     )
+                    
+                    # Show warning if expense was auto-adjusted
+                    if was_adjusted:
+                        st.caption(f"⚠️ Adjusted from age {original_age} to {adjusted_expense_age}")
                 
                 with col4:
                     if st.button("🗑️", key=f"remove_expense_{i}", help="Remove expense"):
