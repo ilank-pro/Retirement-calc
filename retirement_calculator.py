@@ -366,6 +366,17 @@ real‑world spending patterns and country-specific social security systems.""")
                 f"**Social Security:** {ss_name}\n\n"
                 f"**Full Retirement Age:** {config['ss_full_age']}")
 
+        st.header("👤 Personal Details")
+        
+        user_age = st.number_input(
+            "Your current age",
+            min_value=18,
+            max_value=80,
+            value=30,
+            step=1,
+            help="Your current age - used to calculate inflation impact from now until retirement"
+        )
+
         st.header("💼 Your Financial Details")
         
         # Use country-specific defaults
@@ -441,6 +452,9 @@ real‑world spending patterns and country-specific social security systems.""")
         couple_decline = preset["couple_decline"]
         single_decline = preset["single_decline"]
         
+        # Default inflation rate (can be overridden in custom adjustments)
+        inflation_rate = 0.02  # 2% default
+        
         # Allow custom adjustments
         with st.expander("🔧 Customize Assumptions"):
             st.warning("⚠️ **Caution**: The default 'Optimistic' scenario may underestimate retirement needs. Consider using 'Conservative' or 'Moderate' for safer planning.")
@@ -453,6 +467,16 @@ real‑world spending patterns and country-specific social security systems.""")
                 step=0.005,
                 format="%.1f%%",
                 help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+"
+            )
+            
+            inflation_rate = st.slider(
+                "Expected inflation rate", 
+                min_value=0.0, 
+                max_value=0.08, 
+                value=0.02,
+                step=0.001,
+                format="%.1f%%",
+                help="Expected annual inflation rate from now until retirement. This will increase your spending needs over time."
             )
             
             st.subheader("Spending Decline Rates")
@@ -488,16 +512,25 @@ real‑world spending patterns and country-specific social security systems.""")
                 help="Annual spending decline for singles in later retirement"
             )
 
-    # Calculations with custom parameters
-    df = project_spending(monthly_spend, spouse, ret_age, currency_symbol, early_decline, couple_decline, single_decline)
+    # Validate user age is less than retirement age
+    if user_age >= ret_age:
+        st.error(f"⚠️ Your current age ({user_age}) must be less than your desired retirement age ({ret_age}).")
+        st.stop()
+    
+    # Calculate inflation-adjusted spending
+    years_to_retirement = ret_age - user_age
+    inflated_monthly_spend = monthly_spend * (1 + inflation_rate) ** years_to_retirement
+    
+    # Calculations with custom parameters (using inflation-adjusted spending)
+    df = project_spending(inflated_monthly_spend, spouse, ret_age, currency_symbol, early_decline, couple_decline, single_decline)
     df = add_social_security(df, ss_start, base_ss, spouse, config)
     nest_egg = pv_of_needs(df, ret_age, discount_rate)
     
     # Add savings balance calculation
     df = calculate_savings_balance(df, nest_egg, discount_rate)
     
-    # Calculate 4% rule comparison
-    four_percent_rule = calculate_four_percent_rule(monthly_spend)
+    # Calculate 4% rule comparison (using inflation-adjusted spending)
+    four_percent_rule = calculate_four_percent_rule(inflated_monthly_spend)
 
     # Main display
     col1, col2 = st.columns([1, 2])
@@ -528,6 +561,15 @@ real‑world spending patterns and country-specific social security systems.""")
             help="Traditional 4% withdrawal rule suggests 25x annual expenses. Significant differences may indicate aggressive assumptions."
         )
         
+        # Inflation impact metric
+        inflation_multiplier = (1 + inflation_rate) ** years_to_retirement
+        st.metric(
+            "Inflation Impact",
+            f"{inflation_multiplier:.1f}x",
+            delta=f"{format_currency(inflated_monthly_spend - monthly_spend, currency_symbol)}/month",
+            help=f"Due to {inflation_rate:.1%} annual inflation over {years_to_retirement} years, your spending needs will be {inflation_multiplier:.1f}x higher at retirement"
+        )
+        
         # Additional metrics
         total_ss_pv = (df["Social_Security"] * df["Discount_Factor"]).sum()
         total_spending_pv = (df["Gross_Spending"] * df["Discount_Factor"]).sum()
@@ -547,6 +589,8 @@ real‑world spending patterns and country-specific social security systems.""")
         # Show key assumptions being used
         st.subheader("📋 Current Assumptions")
         st.text(f"• Investment return: {discount_rate:.1%}")
+        st.text(f"• Inflation rate: {inflation_rate:.1%}/year")
+        st.text(f"• Years to retirement: {years_to_retirement}")
         st.text(f"• Early decline (62-64): {early_decline:.2%}/year")
         if spouse:
             st.text(f"• Couple decline (65+): {couple_decline:.2%}/year")
@@ -647,7 +691,7 @@ real‑world spending patterns and country-specific social security systems.""")
     
     for scenario_name in scenarios_to_compare:
         scenario_preset = SCENARIO_PRESETS[scenario_name]
-        temp_df = project_spending(monthly_spend, spouse, ret_age, currency_symbol, 
+        temp_df = project_spending(inflated_monthly_spend, spouse, ret_age, currency_symbol, 
                                  scenario_preset["early_decline"], scenario_preset["couple_decline"], scenario_preset["single_decline"])
         temp_df = add_social_security(temp_df, ss_start, base_ss, spouse, config)
         temp_nest_egg = pv_of_needs(temp_df, ret_age, scenario_preset["discount_rate"])
