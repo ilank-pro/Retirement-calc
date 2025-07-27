@@ -488,7 +488,7 @@ def calculate_target_monthly_spend(target_nest_egg: float, spouse: bool, ret_age
     
     # Binary search bounds - reasonable monthly spending range
     low_spend = 500.0   # $500/month minimum
-    high_spend = 50000.0  # $50,000/month maximum
+    high_spend = 200000.0  # $200,000/month maximum (matches validation limit)
     tolerance = 100.0   # Within $100 of target
     max_iterations = 50
     
@@ -1098,7 +1098,7 @@ real‑world spending patterns and country-specific social security systems.""")
                         )
                         
                         # Validate the result is reasonable
-                        if target_monthly_spend < 100 or target_monthly_spend > 100000:
+                        if target_monthly_spend < 100 or target_monthly_spend > 200000:
                             st.error(
                                 f"❌ **Unable to adjust spending**\n\n"
                                 f"The calculated spending ({format_currency(target_monthly_spend, currency_symbol)}/month) "
