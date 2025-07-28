@@ -16,6 +16,13 @@ from reportlab.lib.units import inch
 from reportlab.graphics.shapes import Drawing
 from reportlab.graphics.charts.lineplots import LinePlot
 from reportlab.graphics.charts.legends import Legend
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.fonts import addMapping
+import platform
+import os
+from bidi.algorithm import get_display
+import re
 
 # Debug logging control - set to True to enable detailed logging
 DEBUG_LOGGING = False  # Default to False for production use
@@ -281,6 +288,154 @@ def export_chart_for_pdf(df: pd.DataFrame, currency: str, wealth_df: pd.DataFram
     return img_buffer
 
 
+def contains_hebrew(text):
+    """Check if text contains Hebrew characters."""
+    if not text:
+        return False
+    hebrew_pattern = re.compile(r'[\u0590-\u05FF]')
+    return bool(hebrew_pattern.search(str(text)))
+
+def process_hebrew_text(text):
+    """Process Hebrew text for proper RTL display in PDF."""
+    if not text:
+        return text
+    
+    text_str = str(text).strip()
+    
+    # If text contains Hebrew characters, apply BiDi processing for proper RTL display
+    if contains_hebrew(text_str):
+        try:
+            # Apply bidirectional text processing for proper RTL display
+            # This converts from logical order (typing order) to visual order (display order)
+            processed_text = get_display(text_str)
+            if DEBUG_LOGGING:
+                logger.info(f"Hebrew text processed: '{text_str}' -> '{processed_text}'")
+            return processed_text
+        except Exception as e:
+            if DEBUG_LOGGING:
+                logger.error(f"BiDi processing failed for '{text_str}': {e}")
+            return text_str
+    else:
+        # Return non-Hebrew text as-is
+        return text_str
+
+def get_appropriate_font(text, hebrew_font_name='HebrewFont', default_font='Helvetica'):
+    """Get appropriate font based on text content."""
+    if contains_hebrew(str(text)):
+        return hebrew_font_name
+    else:
+        return default_font
+
+def register_hebrew_fonts():
+    """Register Hebrew-capable fonts for PDF generation with cross-platform support."""
+    try:
+        system = platform.system().lower()
+        if DEBUG_LOGGING:
+            logger.info(f"=== HEBREW FONT REGISTRATION START ===")
+            logger.info(f"Operating system: {system}")
+        
+        # Define potential font paths for different operating systems
+        font_paths = {
+            'darwin': [  # macOS - prioritize fonts that handle Hebrew RTL properly
+                '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+                '/System/Library/Fonts/Supplemental/NewPeninimMT.ttc',
+                '/System/Library/Fonts/SFHebrew.ttf',
+                '/System/Library/Fonts/Supplemental/Arial.ttf',
+                '/System/Library/Fonts/Helvetica.ttc',
+                '/Library/Fonts/Arial.ttf',
+                '/System/Library/Fonts/Times.ttc'
+            ],
+            'windows': [  # Windows
+                'C:/Windows/Fonts/arial.ttf',
+                'C:/Windows/Fonts/arialuni.ttf',
+                'C:/Windows/Fonts/times.ttf',
+                'C:/Windows/Fonts/calibri.ttf'
+            ],
+            'linux': [  # Linux
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                '/usr/share/fonts/TTF/DejaVuSans.ttf',
+                '/usr/share/fonts/truetype/arial.ttf'
+            ]
+        }
+        
+        # Get appropriate font paths for current system
+        if system == 'darwin':
+            candidate_fonts = font_paths['darwin']
+        elif system == 'windows':
+            candidate_fonts = font_paths['windows']
+        else:  # Linux and others
+            candidate_fonts = font_paths['linux']
+        
+        # Try to register the first available font
+        hebrew_font_registered = False
+        hebrew_bold_font_registered = False
+        
+        if DEBUG_LOGGING:
+            logger.info(f"Trying to register fonts from: {candidate_fonts}")
+        
+        for font_path in candidate_fonts:
+            if DEBUG_LOGGING:
+                logger.info(f"Checking font path: {font_path}")
+                logger.info(f"Font exists: {os.path.exists(font_path)}")
+            
+            if os.path.exists(font_path):
+                try:
+                    # Register regular font
+                    if not hebrew_font_registered:
+                        pdfmetrics.registerFont(TTFont('HebrewFont', font_path))
+                        hebrew_font_registered = True
+                        if DEBUG_LOGGING:
+                            logger.info(f"✅ Successfully registered Hebrew font: {font_path}")
+                    
+                    # Try to find bold variant
+                    if not hebrew_bold_font_registered:
+                        bold_path = font_path.replace('.ttf', '-Bold.ttf').replace('.ttc', '-Bold.ttc')
+                        if os.path.exists(bold_path):
+                            pdfmetrics.registerFont(TTFont('HebrewFont-Bold', bold_path))
+                            hebrew_bold_font_registered = True
+                            if DEBUG_LOGGING:
+                                logger.info(f"✅ Successfully registered Hebrew bold font: {bold_path}")
+                        else:
+                            # Use regular font for bold if bold variant not found
+                            pdfmetrics.registerFont(TTFont('HebrewFont-Bold', font_path))
+                            hebrew_bold_font_registered = True
+                            if DEBUG_LOGGING:
+                                logger.info(f"✅ Using regular font for bold: {font_path}")
+                    
+                    if hebrew_font_registered and hebrew_bold_font_registered:
+                        break
+                        
+                except Exception as e:
+                    if DEBUG_LOGGING:
+                        logger.error(f"❌ Failed to register font {font_path}: {str(e)}")
+                    # Continue to next font if this one fails
+                    continue
+        
+        # Create font family mapping if fonts were registered
+        if hebrew_font_registered:
+            addMapping('HebrewFont', 0, 0, 'HebrewFont')  # normal
+            if hebrew_bold_font_registered:
+                addMapping('HebrewFont', 1, 0, 'HebrewFont-Bold')  # bold
+            else:
+                addMapping('HebrewFont', 1, 0, 'HebrewFont')  # bold fallback to normal
+            
+            if DEBUG_LOGGING:
+                logger.info(f"🎯 Font family mapping created. Returning: HebrewFont")
+            return 'HebrewFont'  # Return the registered font name
+        
+        # Fallback to built-in fonts if no Hebrew fonts found
+        if DEBUG_LOGGING:
+            logger.warning(f"⚠️  No Hebrew fonts found, falling back to Helvetica")
+        return 'Helvetica'
+        
+    except Exception as e:
+        if DEBUG_LOGGING:
+            logger.error(f"❌ Exception in font registration: {str(e)}")
+        # Ultimate fallback to built-in font
+        return 'Helvetica'
+
+
 def generate_pdf_report(
     retirement_analysis: dict,
     wealth_at_retirement: float,
@@ -307,15 +462,31 @@ def generate_pdf_report(
 ) -> bytes:
     """Generate a comprehensive PDF report of the retirement analysis."""
     
+    if DEBUG_LOGGING:
+        logger.info(f"🎯 PDF GENERATION START")
+        logger.info(f"📊 Received savings_accounts: {savings_accounts}")
+        logger.info(f"📊 Received planned_expenses: {planned_expenses}")
+    
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72,
                            topMargin=72, bottomMargin=18)
+    
+    # Register Hebrew-capable fonts and use them
+    try:
+        hebrew_font_name = register_hebrew_fonts()
+        if DEBUG_LOGGING:
+            logger.info(f"📄 PDF Generation using font: {hebrew_font_name}")
+    except Exception as e:
+        if DEBUG_LOGGING:
+            logger.error(f"❌ Font registration failed in PDF generation: {str(e)}")
+        hebrew_font_name = 'Helvetica'  # Fallback to Helvetica if registration fails
     
     # Get styles
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
+        fontName='Helvetica',
         fontSize=18,
         textColor=colors.navy,
         spaceAfter=30,
@@ -325,9 +496,18 @@ def generate_pdf_report(
     heading_style = ParagraphStyle(
         'CustomHeading',
         parent=styles['Heading2'],
+        fontName='Helvetica',
         fontSize=14,
         textColor=colors.darkblue,
         spaceAfter=12
+    )
+    
+    # Create a normal style
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10
     )
     
     # Build the document content
@@ -335,63 +515,50 @@ def generate_pdf_report(
     
     # Title and header
     story.append(Paragraph("Multi-Currency Retirement Needs Calculator", title_style))
-    story.append(Paragraph(f"Analysis Report - {config['currency']} ({config['symbol']})", styles['Heading2']))
-    story.append(Paragraph(f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", styles['Normal']))
+    story.append(Paragraph('Analysis Report', heading_style))
+    story.append(Paragraph(f'Generated: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', normal_style))
     story.append(Spacer(1, 20))
     
-    # Personal Information Section
+    # Personal Information Section (simplified)
     story.append(Paragraph("Personal Information", heading_style))
-    personal_data = [
-        ['Current Age:', f'{user_age} years'],
-        ['Desired Retirement Age:', f'{ret_age} years'],
-        ['Years to Retirement:', f'{years_to_retirement} years'],
-        ['Spouse Included:', 'Yes' if spouse else 'No'],
-        ['Country/Region:', f"{config.get('currency', 'N/A')} ({config.get('symbol', 'N/A')})"],
-        ['Planning Scenario:', scenario]
-    ]
-    
-    personal_table = Table(personal_data, colWidths=[2.5*inch, 2.5*inch])
-    personal_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    story.append(personal_table)
+    story.append(Paragraph(f'Current Age: {user_age} years', normal_style))
+    story.append(Paragraph(f'Retirement Age: {ret_age} years', normal_style))
+    story.append(Paragraph(f'Spouse: {"Yes" if spouse else "No"}', normal_style))
     story.append(Spacer(1, 20))
     
     # Key Metrics Section
     story.append(Paragraph("Key Financial Metrics", heading_style))
     
     # Format currency values
-    currency_symbol = config['symbol']
+    currency_symbol = config.get('symbol', '$')
     
     if wealth_at_retirement > 0:
+        additional_needed = retirement_analysis["additional_needed"]
+        total_required = retirement_analysis["total_required"]
         metrics_data = [
-            ['Additional Savings Needed:', f"{currency_symbol}{retirement_analysis['additional_needed']:,.0f}"],
-            ['Total Expected Savings:', f"{currency_symbol}{wealth_at_retirement:,.0f}"],
-            ['Total Retirement Need:', f"{currency_symbol}{retirement_analysis['total_required']:,.0f}"],
-            ['Current Monthly Spending:', f"{currency_symbol}{monthly_spend:,.0f}/month"]
+            ['Additional Savings Needed:', f'{currency_symbol}{additional_needed:,.0f}'],
+            ['Total Expected Savings:', f'{currency_symbol}{wealth_at_retirement:,.0f}'],
+            ['Total Retirement Need:', f'{currency_symbol}{total_required:,.0f}'],
+            ['Current Monthly Spending:', f'{currency_symbol}{monthly_spend:,.0f}/month']
         ]
     else:
         metrics_data = [
-            ['Required Nest Egg:', f"{currency_symbol}{nest_egg:,.0f}"],
-            ['Current Monthly Spending:', f"{currency_symbol}{monthly_spend:,.0f}/month"]
+            ['Required Nest Egg:', f'{currency_symbol}{nest_egg:,.0f}'],
+            ['Current Monthly Spending:', f'{currency_symbol}{monthly_spend:,.0f}/month']
         ]
     
     metrics_table = Table(metrics_data, colWidths=[3*inch, 2*inch])
-    metrics_table.setStyle(TableStyle([
+    table_style = TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), colors.lightblue),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
         ('FONTSIZE', (0, 0), (-1, -1), 11),
-        ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
+    ])
+    metrics_table.setStyle(table_style)
     story.append(metrics_table)
     story.append(Spacer(1, 20))
     
@@ -407,7 +574,7 @@ def generate_pdf_report(
     ]
     
     assumptions_table = Table(assumptions_data, colWidths=[3*inch, 2*inch])
-    assumptions_table.setStyle(TableStyle([
+    assumptions_style = TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), colors.lightyellow),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
@@ -415,7 +582,8 @@ def generate_pdf_report(
         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
+    ])
+    assumptions_table.setStyle(assumptions_style)
     story.append(assumptions_table)
     story.append(Spacer(1, 20))
     
@@ -427,49 +595,94 @@ def generate_pdf_report(
         enabled_expenses = [exp for exp in planned_expenses if exp.get('enabled', True)]
         
         if enabled_accounts:
-            story.append(Paragraph("Savings Accounts:", styles['Heading3']))
+            if DEBUG_LOGGING:
+                logger.info(f"📋 Processing {len(enabled_accounts)} enabled accounts for PDF")
+                for i, account in enumerate(enabled_accounts):
+                    logger.info(f"  Account {i}: name='{account.get('name', 'MISSING')}', amount={account.get('amount', 0)}")
+            
+            hebrew_heading3_style = ParagraphStyle(
+                'CustomHeading3',
+                parent=styles['Heading3'],
+                fontName=hebrew_font_name,
+                fontSize=12
+            )
+            story.append(Paragraph("Savings Accounts:", hebrew_heading3_style))
             account_data = [['Account Name', 'Current Amount', 'ROI', 'Monthly Deposit']]
             for account in enabled_accounts:
+                account_name = account['name']
+                if DEBUG_LOGGING:
+                    logger.info(f"  📝 Adding account to PDF: '{account_name}' (type: {type(account_name)})")
+                    logger.info(f"      Raw bytes: {account_name.encode('utf-8')}")
+                    logger.info(f"      Contains Hebrew: {contains_hebrew(account_name)}")
+                
+                # Process Hebrew text for proper RTL display
+                processed_account_name = process_hebrew_text(account_name)
+                
                 account_data.append([
-                    account['name'],
-                    f"{currency_symbol}{account['amount']:,.0f}",
-                    f"{account['roi']:.1%}",
-                    f"{currency_symbol}{account.get('monthly_deposit', 0):,.0f}/mo"
+                    processed_account_name,
+                    f'{currency_symbol}{account["amount"]:,.0f}',
+                    f'{account["roi"]:.1%}',
+                    f'{currency_symbol}{account.get("monthly_deposit", 0):,.0f}/mo'
                 ])
             
             accounts_table = Table(account_data, colWidths=[1.5*inch, 1.2*inch, 0.8*inch, 1.3*inch])
-            accounts_table.setStyle(TableStyle([
+            accounts_style = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica'),  # Headers use Helvetica
                 ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
+            ]
+            
+            # Apply Hebrew font only to cells with Hebrew content
+            for row_idx in range(1, len(account_data)):  # Skip header row
+                for col_idx in range(len(account_data[row_idx])):
+                    cell_content = account_data[row_idx][col_idx]
+                    if contains_hebrew(str(cell_content)):
+                        accounts_style.append(('FONTNAME', (col_idx, row_idx), (col_idx, row_idx), hebrew_font_name))
+                    else:
+                        accounts_style.append(('FONTNAME', (col_idx, row_idx), (col_idx, row_idx), 'Helvetica'))
+            
+            table_style = TableStyle(accounts_style)
+            accounts_table.setStyle(table_style)
             story.append(accounts_table)
             story.append(Spacer(1, 12))
         
         if enabled_expenses:
-            story.append(Paragraph("Planned Expenses:", styles['Heading3']))
+            story.append(Paragraph("Planned Expenses:", hebrew_heading3_style))
             expense_data = [['Expense Name', 'Amount', 'Age']]
             for expense in enabled_expenses:
+                # Process Hebrew text for proper RTL display
+                processed_expense_name = process_hebrew_text(expense['name'])
+                
                 expense_data.append([
-                    expense['name'],
-                    f"{currency_symbol}{expense['amount']:,.0f}",
-                    f"{expense['age']} years"
+                    processed_expense_name,
+                    f'{currency_symbol}{expense["amount"]:,.0f}',
+                    f'{expense["age"]} years'
                 ])
             
             expenses_table = Table(expense_data, colWidths=[2*inch, 1.5*inch, 1.3*inch])
-            expenses_table.setStyle(TableStyle([
+            expenses_style = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica'),  # Headers use Helvetica
                 ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
+            ]
+            
+            # Apply Hebrew font only to cells with Hebrew content
+            for row_idx in range(1, len(expense_data)):  # Skip header row
+                for col_idx in range(len(expense_data[row_idx])):
+                    cell_content = expense_data[row_idx][col_idx]
+                    if contains_hebrew(str(cell_content)):
+                        expenses_style.append(('FONTNAME', (col_idx, row_idx), (col_idx, row_idx), hebrew_font_name))
+                    else:
+                        expenses_style.append(('FONTNAME', (col_idx, row_idx), (col_idx, row_idx), 'Helvetica'))
+            
+            table_style = TableStyle(expenses_style)
+            expenses_table.setStyle(table_style)
             story.append(expenses_table)
             story.append(Spacer(1, 20))
     
@@ -493,16 +706,17 @@ def generate_pdf_report(
         table_data.append(row.tolist())
     
     data_table = Table(table_data, colWidths=[0.6*inch, 1.1*inch, 1.1*inch, 1.0*inch, 1.1*inch])
-    data_table.setStyle(TableStyle([
+    data_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTNAME', (0, 0), (-1, 0), hebrew_font_name),
+        ('FONTNAME', (0, 1), (-1, -1), hebrew_font_name),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
-    ]))
+    ])
+    data_table.setStyle(data_style)
     story.append(data_table)
     
     # Build PDF

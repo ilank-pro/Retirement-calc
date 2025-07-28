@@ -3,4 +3,5 @@ numpy
 pandas
 matplotlib
 plotly
-reportlab 
+reportlab
+python-bidi 
