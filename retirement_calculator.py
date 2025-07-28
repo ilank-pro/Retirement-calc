@@ -607,7 +607,7 @@ def generate_pdf_report(
                 fontSize=12
             )
             story.append(Paragraph("Savings Accounts:", hebrew_heading3_style))
-            account_data = [['Account Name', 'Current Amount', 'ROI', 'Monthly Deposit']]
+            account_data = [['Account Name', 'Current Amount', 'ROI', 'Monthly Deposit', 'Projected Savings']]
             for account in enabled_accounts:
                 account_name = account['name']
                 if DEBUG_LOGGING:
@@ -618,14 +618,36 @@ def generate_pdf_report(
                 # Process Hebrew text for proper RTL display
                 processed_account_name = process_hebrew_text(account_name)
                 
+                # Calculate projected value at retirement
+                years_to_retirement = ret_age - user_age
+                projected_value = 0
+                
+                # Calculate growth from initial amount
+                if account['amount'] > 0:
+                    projected_value += account['amount'] * (1 + account['roi']) ** years_to_retirement
+                
+                # Calculate growth from monthly deposits (Future Value of Annuity)
+                monthly_deposit = account.get('monthly_deposit', 0)
+                if monthly_deposit > 0 and years_to_retirement > 0:
+                    months_to_retirement = years_to_retirement * 12
+                    monthly_rate = account['roi'] / 12
+                    if monthly_rate > 0:
+                        # FV of ordinary annuity formula
+                        annuity_value = monthly_deposit * ((1 + monthly_rate) ** months_to_retirement - 1) / monthly_rate
+                    else:
+                        # If no interest, just sum the deposits
+                        annuity_value = monthly_deposit * months_to_retirement
+                    projected_value += annuity_value
+                
                 account_data.append([
                     processed_account_name,
                     f'{currency_symbol}{account["amount"]:,.0f}',
                     f'{account["roi"]:.1%}',
-                    f'{currency_symbol}{account.get("monthly_deposit", 0):,.0f}/mo'
+                    f'{currency_symbol}{account.get("monthly_deposit", 0):,.0f}/mo',
+                    f'{currency_symbol}{projected_value:,.0f}'
                 ])
             
-            accounts_table = Table(account_data, colWidths=[1.5*inch, 1.2*inch, 0.8*inch, 1.3*inch])
+            accounts_table = Table(account_data, colWidths=[1.2*inch, 1.0*inch, 0.6*inch, 1.0*inch, 1.2*inch])
             accounts_style = [
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
