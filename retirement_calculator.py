@@ -201,6 +201,22 @@ def format_currency(amount: float, currency_symbol: str) -> str:
     return f"{currency_symbol}{amount:,.0f}"
 
 
+def on_savings_account_change():
+    """Callback for when savings account values change."""
+    # Reset the settings rerun flag to allow UI updates after settings load
+    if 'settings_rerun_done' in st.session_state:
+        st.session_state.settings_rerun_done = False
+    safe_rerun("savings_account_changed")
+
+
+def on_planned_expense_change():
+    """Callback for when planned expense values change."""
+    # Reset the settings rerun flag to allow UI updates after settings load
+    if 'settings_rerun_done' in st.session_state:
+        st.session_state.settings_rerun_done = False
+    safe_rerun("planned_expense_changed")
+
+
 def calculate_four_percent_rule(monthly_spend: float) -> float:
     """Calculate nest egg needed using traditional 4% withdrawal rule."""
     annual_spending = monthly_spend * 12
@@ -1332,6 +1348,15 @@ real‑world spending patterns and country-specific social security systems.""")
         # Savings Accounts Section
         st.subheader("💳 Savings Accounts")
         
+        # Store previous values before rendering widgets for change detection
+        previous_account_values = []
+        for i, account in enumerate(st.session_state.savings_accounts):
+            previous_account_values.append({
+                'amount': account['amount'],
+                'roi': account['roi'],
+                'monthly_deposit': account.get('monthly_deposit', 0)
+            })
+        
         # Add new savings account
         col1, col2 = st.columns([4, 1])
         with col1:
@@ -1375,25 +1400,29 @@ real‑world spending patterns and country-specific social security systems.""")
                     col1, col2 = st.columns([3, 2])
                     
                     with col1:
+                        account_amount_key = f"account_amount_{i}_{account['name']}"
                         account['amount'] = st.number_input(
                             "Amount",
                             value=int(float(account['amount'])),
                             step=1000,
                             label_visibility="collapsed",
-                            format="%d"
+                            format="%d",
+                            key=account_amount_key
                         )
                         # Display currency symbol below the input
                         st.caption(f"{currency_symbol}{account['amount']:,}")
                     
                     with col2:
                         # ROI input control (matching amount input style)
+                        account_roi_key = f"account_roi_{i}_{account['name']}"
                         account['roi'] = st.number_input(
                             "ROI %",
                             min_value=0.0,
                             value=account['roi'] * 100,
                             step=0.1,
                             format="%.1f",
-                            label_visibility="collapsed"
+                            label_visibility="collapsed",
+                            key=account_roi_key
                         ) / 100
                         # Display ROI caption below the input (matching amount style)
                         st.caption(f"ROI: {account['roi']*100:.1f}%")
@@ -1402,12 +1431,14 @@ real‑world spending patterns and country-specific social security systems.""")
                     col1, col2 = st.columns([3, 2])
                     
                     with col1:
+                        account_deposit_key = f"account_deposit_{i}_{account['name']}"
                         account['monthly_deposit'] = st.number_input(
                             "Monthly Deposit",
                             value=int(float(account.get('monthly_deposit', 0))),
                             step=100,
                             label_visibility="collapsed",
-                            format="%d"
+                            format="%d",
+                            key=account_deposit_key
                         )
                         # Display currency symbol below the input (matching amount style)
                         st.caption(f"{currency_symbol}{account['monthly_deposit']:,}/month")
@@ -1469,12 +1500,14 @@ real‑world spending patterns and country-specific social security systems.""")
                 col1, col2 = st.columns([3, 2])
                 
                 with col1:
+                    expense_amount_key = f"expense_amount_{i}_{expense['name']}"
                     expense['amount'] = st.number_input(
                         "Amount",
                         value=int(float(expense['amount'])),
                         step=1000,
                         label_visibility="collapsed",
-                        format="%d"
+                        format="%d",
+                        key=expense_amount_key
                     )
                     # Display currency symbol below the input (matching savings accounts style)
                     st.caption(f"{currency_symbol}{expense['amount']:,}")
@@ -1485,13 +1518,15 @@ real‑world spending patterns and country-specific social security systems.""")
                     adjusted_expense_age = max(expense['age'], user_age)
                     was_adjusted = adjusted_expense_age != original_age
                     
+                    expense_age_key = f"expense_age_{i}_{expense['name']}"
                     expense['age'] = st.number_input(
                         "Age",
                         min_value=float(user_age),
                         max_value=80.0,
                         value=float(adjusted_expense_age),
                         step=1.0,
-                        label_visibility="collapsed"
+                        label_visibility="collapsed",
+                        key=expense_age_key
                     )
                     
                     # Show caption and warning if needed (matching savings accounts style)
@@ -1506,6 +1541,88 @@ real‑world spending patterns and country-specific social security systems.""")
         for i in reversed(expenses_to_remove):
             del st.session_state.planned_expenses[i]
             safe_rerun("remove_planned_expense")
+
+        # Check for changes in widget values and trigger rerun if needed
+        # This ensures UI updates when account/expense values change after settings load
+        logger.info("=== CHANGE DETECTION START ===")
+        savings_changed = False
+        expenses_changed = False
+        
+        # Check if any savings account values have changed by comparing with previous values
+        logger.info(f"Checking {len(st.session_state.savings_accounts)} savings accounts for changes")
+        for i, account in enumerate(st.session_state.savings_accounts):
+            if i >= len(previous_account_values):
+                # New account added, skip change detection for this one
+                continue
+                
+            account_amount_key = f"account_amount_{i}_{account['name']}"
+            account_roi_key = f"account_roi_{i}_{account['name']}"
+            account_deposit_key = f"account_deposit_{i}_{account['name']}"
+            
+            previous = previous_account_values[i]
+            
+            logger.info(f"🏦 Account {i} ({account['name']}):")
+            logger.info(f"  Previous amount: {previous['amount']}")
+            logger.info(f"  Previous ROI: {previous['roi']}")
+            logger.info(f"  Previous deposit: {previous['monthly_deposit']}")
+            logger.info(f"  Current amount: {account['amount']}")
+            logger.info(f"  Current ROI: {account['roi']}")
+            logger.info(f"  Current deposit: {account.get('monthly_deposit', 0)}")
+            
+            # Compare current values with previous values (not widget values)
+            if account['amount'] != previous['amount']:
+                logger.info(f"  🔄 AMOUNT CHANGED: {previous['amount']} → {account['amount']}")
+                savings_changed = True
+            else:
+                logger.info(f"  ✅ Amount unchanged")
+            
+            if abs(account['roi'] - previous['roi']) > 0.001:  # Small tolerance for float comparison
+                logger.info(f"  🔄 ROI CHANGED: {previous['roi']} → {account['roi']}")
+                savings_changed = True
+            else:
+                logger.info(f"  ✅ ROI unchanged")
+            
+            current_deposit = account.get('monthly_deposit', 0)
+            if current_deposit != previous['monthly_deposit']:
+                logger.info(f"  🔄 DEPOSIT CHANGED: {previous['monthly_deposit']} → {current_deposit}")
+                savings_changed = True
+            else:
+                logger.info(f"  ✅ Deposit unchanged")
+        
+        # Check if any planned expense values have changed
+        for i, expense in enumerate(st.session_state.planned_expenses):
+            expense_amount_key = f"expense_amount_{i}_{expense['name']}"
+            expense_age_key = f"expense_age_{i}_{expense['name']}"
+            
+            if expense_amount_key in st.session_state:
+                if st.session_state[expense_amount_key] != expense['amount']:
+                    expense['amount'] = st.session_state[expense_amount_key]
+                    expenses_changed = True
+            
+            if expense_age_key in st.session_state:
+                if st.session_state[expense_age_key] != expense['age']:
+                    expense['age'] = int(st.session_state[expense_age_key])
+                    expenses_changed = True
+        
+        # Trigger rerun if changes detected (and reset settings flag if needed)
+        logger.info(f"=== CHANGE DETECTION SUMMARY ===")
+        logger.info(f"Savings changed: {savings_changed}")
+        logger.info(f"Expenses changed: {expenses_changed}")
+        
+        if savings_changed or expenses_changed:
+            logger.info("🔄 CHANGES DETECTED - Triggering rerun")
+            if 'settings_rerun_done' in st.session_state:
+                logger.info("Resetting settings_rerun_done flag")
+                st.session_state.settings_rerun_done = False
+            reason = []
+            if savings_changed:
+                reason.append("savings_changed")
+            if expenses_changed:
+                reason.append("expenses_changed")
+            logger.info(f"Rerun reason: {reason}")
+            safe_rerun("_".join(reason))
+        else:
+            logger.info("✅ No changes detected")
 
         st.header("💼 Your Financial Details")
         
@@ -2056,8 +2173,31 @@ real‑world spending patterns and country-specific social security systems.""")
         # Show wealth accumulation summary
         if st.session_state.savings_accounts or st.session_state.planned_expenses:
             st.subheader("💰 Wealth Summary")
+            
+            # Debug logging for total savings calculation
+            logger.info("=== TOTAL SAVINGS CALCULATION ===")
+            logger.info(f"Number of savings accounts: {len(st.session_state.savings_accounts)}")
+            
+            enabled_accounts = [account for account in st.session_state.savings_accounts if account.get('enabled', True)]
+            logger.info(f"Number of enabled accounts: {len(enabled_accounts)}")
+            
+            total_breakdown = []
+            for i, account in enumerate(st.session_state.savings_accounts):
+                enabled = account.get('enabled', True)
+                amount = account['amount']
+                total_breakdown.append(f"  Account {i} ({account['name']}): {amount} (enabled: {enabled})")
+            
+            logger.info("Account breakdown:")
+            for line in total_breakdown:
+                logger.info(line)
+            
             current_total = sum(account['amount'] for account in st.session_state.savings_accounts if account.get('enabled', True))
             total_expenses = sum(expense['amount'] for expense in st.session_state.planned_expenses if expense.get('enabled', True))
+            
+            logger.info(f"Calculated current_total: {current_total}")
+            logger.info(f"Calculated total_expenses: {total_expenses}")
+            logger.info(f"Formatted current savings: {format_currency(current_total, currency_symbol)}")
+            
             st.text(f"• Current savings: {format_currency(current_total, currency_symbol)}")
             st.text(f"• Planned expenses: {format_currency(total_expenses, currency_symbol)}")
             st.text(f"• Wealth at retirement: {format_currency(wealth_at_retirement, currency_symbol)}")
