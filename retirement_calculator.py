@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import logging
 import sys
-from datetime import datetime
+import datetime
 from io import BytesIO
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
@@ -23,9 +23,10 @@ import platform
 import os
 from bidi.algorithm import get_display
 import re
+import json
 
 # Debug logging control - set to True to enable detailed logging
-DEBUG_LOGGING = False  # Default to False for production use
+DEBUG_LOGGING = True  # Default to False for production use
 
 # Setup logger for retirement calculator debugging (only if enabled)
 if DEBUG_LOGGING:
@@ -516,7 +517,7 @@ def generate_pdf_report(
     # Title and header
     story.append(Paragraph("Multi-Currency Retirement Needs Calculator", title_style))
     story.append(Paragraph('Analysis Report', heading_style))
-    story.append(Paragraph(f'Generated: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}', normal_style))
+    story.append(Paragraph(f'Generated: {datetime.datetime.now().strftime("%B %d, %Y at %I:%M %p")}', normal_style))
     story.append(Spacer(1, 20))
     
     # Personal Information Section (simplified)
@@ -1002,6 +1003,210 @@ def calculate_target_monthly_spend(target_nest_egg: float, spouse: bool, ret_age
     return (low_spend + high_spend) / 2
 
 
+def export_settings() -> dict:
+    """Export all user settings from session state to a JSON-serializable dictionary."""
+    
+    settings = {
+        # Metadata
+        "metadata": {
+            "export_timestamp": datetime.datetime.now().isoformat(),
+            "app_version": "1.0",
+            "settings_schema_version": "1.0"
+        },
+        
+        # Core settings
+        "core_settings": {
+            "selected_country": st.session_state.get('selected_country', 'USA'),
+            "user_age": st.session_state.get('user_age', 30),
+            "spouse": st.session_state.get('spouse', True),
+            "ret_age": st.session_state.get('ret_age', 65),
+            "monthly_spend": st.session_state.get('monthly_spend'),
+            "ss_start": st.session_state.get('ss_start'),
+            "base_ss": st.session_state.get('base_ss')
+        },
+        
+        # Advanced assumptions
+        "advanced_assumptions": {
+            "selected_scenario": st.session_state.get('selected_scenario', 'Moderate'),
+            "discount_rate": st.session_state.get('discount_rate'),
+            "inflation_rate": st.session_state.get('inflation_rate', 0.02),
+            "early_decline": st.session_state.get('early_decline'),
+            "couple_decline": st.session_state.get('couple_decline'),
+            "single_decline": st.session_state.get('single_decline')
+        },
+        
+        # Wealth accumulator
+        "wealth_accumulator": {
+            "savings_accounts": st.session_state.get('savings_accounts', []),
+            "planned_expenses": st.session_state.get('planned_expenses', [])
+        }
+    }
+    
+    return settings
+
+
+def import_settings(settings_dict: dict) -> tuple[bool, str]:
+    """Import settings from dictionary into session state.
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    try:
+        # Validate basic structure
+        if not isinstance(settings_dict, dict):
+            return False, "Invalid file format: Not a valid JSON object"
+        
+        required_sections = ["core_settings", "advanced_assumptions", "wealth_accumulator"]
+        for section in required_sections:
+            if section not in settings_dict:
+                return False, f"Invalid file format: Missing required section '{section}'"
+        
+        # Track what was successfully imported for debugging
+        imported_settings = []
+        
+        # Import core settings with validation
+        core = settings_dict["core_settings"]
+        
+        # Validate and import country
+        if "selected_country" in core and core["selected_country"] in COUNTRY_CONFIG:
+            st.session_state.selected_country = core["selected_country"]
+            imported_settings.append(f"country: {core['selected_country']}")
+        
+        # Validate and import numeric values
+        if "user_age" in core and isinstance(core["user_age"], (int, float)) and 18 <= core["user_age"] <= 80:
+            st.session_state.user_age = int(core["user_age"])
+            imported_settings.append(f"user_age: {core['user_age']}")
+        
+        if "spouse" in core and isinstance(core["spouse"], bool):
+            st.session_state.spouse = core["spouse"]
+            imported_settings.append(f"spouse: {core['spouse']}")
+        
+        if "ret_age" in core and core["ret_age"] in [55, 60, 62, 65, 67, 70]:
+            st.session_state.ret_age = core["ret_age"]
+            imported_settings.append(f"ret_age: {core['ret_age']}")
+        
+        if "monthly_spend" in core and core["monthly_spend"] is not None:
+            if isinstance(core["monthly_spend"], (int, float)) and core["monthly_spend"] > 0:
+                st.session_state.monthly_spend = float(core["monthly_spend"])
+                imported_settings.append(f"monthly_spend: {core['monthly_spend']}")
+        
+        if "ss_start" in core and core["ss_start"] is not None:
+            if isinstance(core["ss_start"], (int, float)):
+                # Use country-specific SS age ranges for validation
+                country = core.get("selected_country", "USA")
+                if country in COUNTRY_CONFIG:
+                    config = COUNTRY_CONFIG[country]
+                    min_ss_age = config["ss_early_age"]
+                    max_ss_age = config["ss_late_age"]
+                    if min_ss_age <= core["ss_start"] <= max_ss_age:
+                        st.session_state.ss_start = int(core["ss_start"])
+                        imported_settings.append(f"ss_start: {core['ss_start']}")
+        
+        if "base_ss" in core and core["base_ss"] is not None:
+            if isinstance(core["base_ss"], (int, float)) and core["base_ss"] > 0:
+                st.session_state.base_ss = float(core["base_ss"])
+                imported_settings.append(f"base_ss: {core['base_ss']}")
+        
+        # Import advanced assumptions
+        assumptions = settings_dict["advanced_assumptions"]
+        
+        if "selected_scenario" in assumptions and assumptions["selected_scenario"] in SCENARIO_PRESETS:
+            st.session_state.selected_scenario = assumptions["selected_scenario"]
+            imported_settings.append(f"scenario: {assumptions['selected_scenario']}")
+        
+        # Import numeric assumptions with validation
+        numeric_assumptions = {
+            "discount_rate": (0.01, 0.15),
+            "inflation_rate": (0.0, 0.1),
+            "early_decline": (0.0, 0.05),
+            "couple_decline": (0.0, 0.1),
+            "single_decline": (0.0, 0.1)
+        }
+        
+        for key, (min_val, max_val) in numeric_assumptions.items():
+            if key in assumptions and assumptions[key] is not None:
+                value = assumptions[key]
+                if isinstance(value, (int, float)) and min_val <= value <= max_val:
+                    st.session_state[key] = float(value)
+                    imported_settings.append(f"{key}: {value}")
+        
+        # Import wealth accumulator data
+        wealth = settings_dict["wealth_accumulator"]
+        
+        # Import savings accounts with validation
+        if "savings_accounts" in wealth and isinstance(wealth["savings_accounts"], list):
+            valid_accounts = []
+            for account in wealth["savings_accounts"]:
+                if (isinstance(account, dict) and 
+                    "name" in account and isinstance(account["name"], str) and
+                    "amount" in account and isinstance(account["amount"], (int, float)) and account["amount"] >= 0 and
+                    "roi" in account and isinstance(account["roi"], (int, float)) and 0 <= account["roi"] <= 1 and
+                    "enabled" in account and isinstance(account["enabled"], bool)):
+                    
+                    valid_account = {
+                        "name": account["name"],
+                        "amount": float(account["amount"]),
+                        "roi": float(account["roi"]),
+                        "monthly_deposit": float(account.get("monthly_deposit", 0)),
+                        "enabled": account["enabled"]
+                    }
+                    valid_accounts.append(valid_account)
+            
+            st.session_state.savings_accounts = valid_accounts
+            imported_settings.append(f"savings_accounts: {len(valid_accounts)} accounts")
+        
+        # Import planned expenses with validation
+        if "planned_expenses" in wealth and isinstance(wealth["planned_expenses"], list):
+            valid_expenses = []
+            for expense in wealth["planned_expenses"]:
+                if (isinstance(expense, dict) and 
+                    "name" in expense and isinstance(expense["name"], str) and
+                    "amount" in expense and isinstance(expense["amount"], (int, float)) and expense["amount"] >= 0 and
+                    "age" in expense and isinstance(expense["age"], (int, float)) and 18 <= expense["age"] <= 100 and
+                    "enabled" in expense and isinstance(expense["enabled"], bool)):
+                    
+                    valid_expense = {
+                        "name": expense["name"],
+                        "amount": float(expense["amount"]),
+                        "age": int(expense["age"]),
+                        "enabled": expense["enabled"]
+                    }
+                    valid_expenses.append(valid_expense)
+            
+            st.session_state.planned_expenses = valid_expenses
+            imported_settings.append(f"planned_expenses: {len(valid_expenses)} expenses")
+        
+        # Create clean success message
+        if imported_settings:
+            message = "Settings loaded successfully!"
+        else:
+            message = "Settings file processed, but no valid settings found to import."
+        
+        return True, message
+        
+    except Exception as e:
+        return False, f"Error loading settings: {str(e)}"
+
+
+def safe_rerun(reason: str = "unknown"):
+    """Safely trigger a rerun with loop prevention."""
+    MAX_RERUNS = 5
+    
+    # Check if we're already in a rerun loop
+    if st.session_state.rerun_count >= MAX_RERUNS:
+        st.warning("⚠️ **Please refresh the page**: The app detected unusual activity and needs to be reloaded.")
+        logger.warning(f"Prevented infinite rerun loop. Reason: {reason}, Count: {st.session_state.rerun_count}")
+        return False
+    
+    # Increment counter and track reason
+    st.session_state.rerun_count += 1
+    st.session_state.last_rerun_reason = reason
+    
+    logger.info(f"Safe rerun #{st.session_state.rerun_count}: {reason}")
+    st.rerun()
+    return True
+
+
 def main():
     st.set_page_config(page_title="Multi-Currency Retirement Calculator", layout="wide")
     st.title("💰 Multi-Currency Retirement Needs Calculator")
@@ -1011,6 +1216,18 @@ real‑world spending patterns and country-specific social security systems.""")
     # Test logging immediately when app starts
     logger.info("=== APP START ===")
     logger.info(f"Session state keys: {list(st.session_state.keys())}")
+    
+    # Initialize rerun guard mechanism
+    if 'rerun_count' not in st.session_state:
+        st.session_state.rerun_count = 0
+    if 'loading_settings' not in st.session_state:
+        st.session_state.loading_settings = False
+    if 'last_rerun_reason' not in st.session_state:
+        st.session_state.last_rerun_reason = None
+    
+    # Reset rerun count on fresh page load (when no other state exists)
+    if len(st.session_state.keys()) <= 4:  # Only has our new guard keys
+        st.session_state.rerun_count = 0
     
     # Initialize session state for wealth accumulator
     if 'savings_accounts' not in st.session_state:
@@ -1055,11 +1272,18 @@ real‑world spending patterns and country-specific social security systems.""")
     with st.sidebar:
         st.header("🌍 Country & Currency")
         
-        # Country selection
+        # Country selection with dynamic index based on session_state
+        country_options = list(COUNTRY_CONFIG.keys())
+        current_country = st.session_state.selected_country
+        try:
+            country_index = country_options.index(current_country)
+        except ValueError:
+            country_index = 0  # Fallback to first option if not found
+            
         selected_country = st.selectbox(
             "Select your country/region:",
-            options=list(COUNTRY_CONFIG.keys()),
-            index=0,
+            options=country_options,
+            index=country_index,
             help="This determines currency, social security rules, and default values"
         )
         
@@ -1096,10 +1320,9 @@ real‑world spending patterns and country-specific social security systems.""")
             "Your current age",
             min_value=18,
             max_value=80,
-            value=st.session_state.user_age,
+            value=int(st.session_state.user_age),
             step=1,
-            help="Your current age - used to calculate inflation impact from now until retirement",
-            key="user_age_input"
+            help="Your current age - used to calculate inflation impact from now until retirement"
         )
         st.session_state.user_age = user_age
 
@@ -1123,83 +1346,83 @@ real‑world spending patterns and country-specific social security systems.""")
                         'monthly_deposit': 0,
                         'enabled': True
                     })
-                    st.rerun()
+                    safe_rerun("add_savings_account")
         
         # Display existing savings accounts
         accounts_to_remove = []
-        for i, account in enumerate(st.session_state.savings_accounts):
-            with st.container():
-                # Row 1: Account name, enable/disable toggle, and remove button
-                col1, col2, col3 = st.columns([4, 1, 1])
+        try:
+            for i, account in enumerate(st.session_state.savings_accounts):
+                with st.container():
+                    # Row 1: Account name, enable/disable toggle, and remove button
+                    col1, col2, col3 = st.columns([4, 1, 1])
+                    
+                    with col1:
+                        st.text(f"🏦 {account['name']}")
+                    
+                    with col2:
+                        # Enable/disable toggle
+                        toggle_text = "✅" if account.get('enabled', True) else "❌"
+                        if st.button(toggle_text, help="Enable/disable account"):
+                            account['enabled'] = not account.get('enabled', True)
+                            safe_rerun("toggle_savings_account")
+                    
+                    with col3:
+                        if st.button("🗑️", help="Remove account"):
+                            accounts_to_remove.append(i)
+                    
+                    # Row 2: Amount input and ROI controls
+                    col1, col2 = st.columns([3, 2])
+                    
+                    with col1:
+                        account['amount'] = st.number_input(
+                            "Amount",
+                            value=int(float(account['amount'])),
+                            step=1000,
+                            label_visibility="collapsed",
+                            format="%d"
+                        )
+                        # Display currency symbol below the input
+                        st.caption(f"{currency_symbol}{account['amount']:,}")
+                    
+                    with col2:
+                        # ROI input control (matching amount input style)
+                        account['roi'] = st.number_input(
+                            "ROI %",
+                            min_value=0.0,
+                            value=account['roi'] * 100,
+                            step=0.1,
+                            format="%.1f",
+                            label_visibility="collapsed"
+                        ) / 100
+                        # Display ROI caption below the input (matching amount style)
+                        st.caption(f"ROI: {account['roi']*100:.1f}%")
                 
-                with col1:
-                    st.text(f"🏦 {account['name']}")
-                
-                with col2:
-                    # Enable/disable toggle
-                    toggle_text = "✅" if account.get('enabled', True) else "❌"
-                    if st.button(toggle_text, key=f"toggle_account_{i}", help="Enable/disable account"):
-                        account['enabled'] = not account.get('enabled', True)
-                        st.rerun()
-                
-                with col3:
-                    if st.button("🗑️", key=f"remove_account_{i}", help="Remove account"):
-                        accounts_to_remove.append(i)
-                
-                # Row 2: Amount input and ROI controls
-                col1, col2 = st.columns([3, 2])
-                
-                with col1:
-                    account['amount'] = st.number_input(
-                        "Amount",
-                        value=account['amount'],
-                        step=1000,
-                        key=f"account_amount_{i}",
-                        label_visibility="collapsed",
-                        format="%d"
-                    )
-                    # Display currency symbol below the input
-                    st.caption(f"{currency_symbol}{account['amount']:,}")
-                
-                with col2:
-                    # ROI input control (matching amount input style)
-                    account['roi'] = st.number_input(
-                        "ROI %",
-                        min_value=0.0,
-                        value=account['roi'] * 100,
-                        step=0.1,
-                        format="%.1f",
-                        key=f"account_roi_{i}",
-                        label_visibility="collapsed"
-                    ) / 100
-                    # Display ROI caption below the input (matching amount style)
-                    st.caption(f"ROI: {account['roi']*100:.1f}%")
-                
-                # Row 3: Monthly deposit input
-                col1, col2 = st.columns([3, 2])
-                
-                with col1:
-                    account['monthly_deposit'] = st.number_input(
-                        "Monthly Deposit",
-                        value=account.get('monthly_deposit', 0),
-                        step=100,
-                        key=f"account_monthly_deposit_{i}",
-                        label_visibility="collapsed",
-                        format="%d"
-                    )
-                    # Display currency symbol below the input (matching amount style)
-                    st.caption(f"{currency_symbol}{account['monthly_deposit']:,}/month")
-                
-                with col2:
-                    # Empty column for alignment
-                    st.empty()
-                        
-                st.divider()
+                    # Row 3: Monthly deposit input
+                    col1, col2 = st.columns([3, 2])
+                    
+                    with col1:
+                        account['monthly_deposit'] = st.number_input(
+                            "Monthly Deposit",
+                            value=int(float(account.get('monthly_deposit', 0))),
+                            step=100,
+                            label_visibility="collapsed",
+                            format="%d"
+                        )
+                        # Display currency symbol below the input (matching amount style)
+                        st.caption(f"{currency_symbol}{account['monthly_deposit']:,}/month")
+                    
+                    with col2:
+                        # Empty column for alignment
+                        st.empty()
+                            
+                    st.divider()
+        except Exception as e:
+            st.error("⚠️ **Error loading savings accounts**: Please refresh the page or reload your settings.")
         
         # Remove accounts marked for deletion
         for i in reversed(accounts_to_remove):
             del st.session_state.savings_accounts[i]
-            st.rerun()
+            safe_rerun("remove_savings_account")
         
         # Planned Expenses Section
         st.subheader("🏠 Planned Expenses")
@@ -1218,7 +1441,7 @@ real‑world spending patterns and country-specific social security systems.""")
                         'age': user_age + 5,
                         'enabled': True
                     })
-                    st.rerun()
+                    safe_rerun("add_planned_expense")
         
         # Display existing planned expenses
         expenses_to_remove = []
@@ -1233,12 +1456,12 @@ real‑world spending patterns and country-specific social security systems.""")
                 with col2:
                     # Enable/disable toggle
                     toggle_text = "✅" if expense.get('enabled', True) else "❌"
-                    if st.button(toggle_text, key=f"toggle_expense_{i}", help="Enable/disable expense"):
+                    if st.button(toggle_text, help="Enable/disable expense"):
                         expense['enabled'] = not expense.get('enabled', True)
-                        st.rerun()
+                        safe_rerun("toggle_planned_expense")
                 
                 with col3:
-                    if st.button("🗑️", key=f"remove_expense_{i}", help="Remove expense"):
+                    if st.button("🗑️", help="Remove expense"):
                         expenses_to_remove.append(i)
                 
                 # Row 2: Amount input and age input
@@ -1247,9 +1470,8 @@ real‑world spending patterns and country-specific social security systems.""")
                 with col1:
                     expense['amount'] = st.number_input(
                         "Amount",
-                        value=expense['amount'],
+                        value=int(float(expense['amount'])),
                         step=1000,
-                        key=f"expense_amount_{i}",
                         label_visibility="collapsed",
                         format="%d"
                     )
@@ -1264,11 +1486,10 @@ real‑world spending patterns and country-specific social security systems.""")
                     
                     expense['age'] = st.number_input(
                         "Age",
-                        min_value=user_age,
-                        max_value=80,
-                        value=adjusted_expense_age,
-                        step=1,
-                        key=f"expense_age_{i}",
+                        min_value=float(user_age),
+                        max_value=80.0,
+                        value=float(adjusted_expense_age),
+                        step=1.0,
                         label_visibility="collapsed"
                     )
                     
@@ -1283,7 +1504,7 @@ real‑world spending patterns and country-specific social security systems.""")
         # Remove expenses marked for deletion
         for i in reversed(expenses_to_remove):
             del st.session_state.planned_expenses[i]
-            st.rerun()
+            safe_rerun("remove_planned_expense")
 
         st.header("💼 Your Financial Details")
         
@@ -1292,20 +1513,24 @@ real‑world spending patterns and country-specific social security systems.""")
             f"Current household monthly spend ({currency_symbol})", 
             value=float(st.session_state.monthly_spend or config["default_monthly_spend"]), 
             step=100.0,
-            help=f"Your current monthly household expenses in {config['currency']}",
-            key="monthly_spend_input"
+            help=f"Your current monthly household expenses in {config['currency']}"
         )
         st.session_state.monthly_spend = monthly_spend
         
-        spouse = st.checkbox("Include spouse?", value=st.session_state.spouse, key="spouse_input")
+        spouse = st.checkbox("Include spouse?", value=st.session_state.spouse)
         st.session_state.spouse = spouse
         
+        ret_age_options = [55, 60, 62, 65, 67, 70]
+        try:
+            ret_age_index = ret_age_options.index(st.session_state.ret_age)
+        except ValueError:
+            ret_age_index = 3  # Default to 65
+            
         ret_age = st.selectbox(
             "Desired retirement age", 
-            [55, 60, 62, 65, 67, 70], 
-            index=[55, 60, 62, 65, 67, 70].index(st.session_state.ret_age),
-            help="Age when you want to stop working and start drawing retirement funds",
-            key="ret_age_input"
+            ret_age_options, 
+            index=ret_age_index,
+            help="Age when you want to stop working and start drawing retirement funds"
         )
         st.session_state.ret_age = ret_age
         
@@ -1319,17 +1544,15 @@ real‑world spending patterns and country-specific social security systems.""")
             min_value=min_ss_age, 
             max_value=max_ss_age, 
             value=st.session_state.ss_start or default_ss_age,
-            help=f"Age when you claim {ss_name} benefits. Earlier = lower benefits, later = higher benefits",
-            key="ss_start_input"
+            help=f"Age when you claim {ss_name} benefits. Earlier = lower benefits, later = higher benefits"
         )
         st.session_state.ss_start = ss_start
         
         base_ss = st.number_input(
             f"Estimated individual {ss_name} benefit at age {config['ss_full_age']} ({currency_symbol}/month)", 
-            value=st.session_state.base_ss or config["default_ss_benefit"], 
-            step=50,
-            help=f"Your estimated monthly {ss_name} benefit at full retirement age",
-            key="base_ss_input"
+            value=float(st.session_state.base_ss or config["default_ss_benefit"]), 
+            step=50.0,
+            help=f"Your estimated monthly {ss_name} benefit at full retirement age"
         )
         st.session_state.base_ss = base_ss
 
@@ -1352,11 +1575,17 @@ real‑world spending patterns and country-specific social security systems.""")
         # Advanced assumptions section
         st.header("⚙️ Advanced Assumptions")
         
-        # Scenario selection
+        # Scenario selection with safe index handling
+        scenario_options = list(SCENARIO_PRESETS.keys())
+        try:
+            scenario_index = scenario_options.index(st.session_state.selected_scenario)
+        except ValueError:
+            scenario_index = scenario_options.index("Moderate")  # Default to Moderate
+            
         scenario = st.selectbox(
             "Planning Scenario",
-            options=list(SCENARIO_PRESETS.keys()),
-            index=list(SCENARIO_PRESETS.keys()).index(st.session_state.selected_scenario),
+            options=scenario_options,
+            index=scenario_index,
             help="Choose conservative, moderate, or optimistic assumptions"
         )
         
@@ -1402,8 +1631,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=st.session_state.discount_rate or preset["discount_rate"],
                 step=0.005,
                 format="%.1f%%",
-                help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+",
-                key="discount_rate_slider"
+                help="Higher returns reduce needed savings but increase risk. Conservative: 3-4%, Moderate: 5-6%, Optimistic: 7%+"
             )
             st.session_state.discount_rate = discount_rate
             
@@ -1414,8 +1642,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=st.session_state.inflation_rate,
                 step=0.001,
                 format="%.1f%%",
-                help="Expected annual inflation rate from now until retirement. This will increase your spending needs over time.",
-                key="inflation_rate_slider"
+                help="Expected annual inflation rate from now until retirement. This will increase your spending needs over time."
             )
             st.session_state.inflation_rate = inflation_rate
             
@@ -1429,8 +1656,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=st.session_state.early_decline or preset["early_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Transition from 'go-go' to 'slow-go' years",
-                key="early_decline_slider"
+                help="Transition from 'go-go' to 'slow-go' years"
             )
             st.session_state.early_decline = early_decline
             
@@ -1441,8 +1667,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=st.session_state.couple_decline or preset["couple_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Annual spending decline for couples in later retirement",
-                key="couple_decline_slider"
+                help="Annual spending decline for couples in later retirement"
             )
             st.session_state.couple_decline = couple_decline
             
@@ -1453,10 +1678,81 @@ real‑world spending patterns and country-specific social security systems.""")
                 value=st.session_state.single_decline or preset["single_decline"],
                 step=0.0025,
                 format="%.2f%%",
-                help="Annual spending decline for singles in later retirement",
-                key="single_decline_slider"
+                help="Annual spending decline for singles in later retirement"
             )
             st.session_state.single_decline = single_decline
+
+        # Save Settings
+        st.subheader("💾 Save Current Settings")
+        
+        config_name = st.text_input(
+            "Configuration name",
+            placeholder="e.g., Conservative Plan, Family Scenario",
+            help="Enter a name for this configuration"
+        )
+        
+        if config_name.strip():
+            try:
+                settings_data = export_settings()
+                settings_json = json.dumps(settings_data, indent=2)
+                
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                filename = f"retirement_settings_{config_name.replace(' ', '_')}_{timestamp}.json"
+                
+                st.download_button(
+                    label="💾 Save Settings",
+                    data=settings_json,
+                    file_name=filename,
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Error saving settings: {str(e)}")
+        else:
+            st.button("💾 Save Settings", disabled=True, use_container_width=True, help="Please enter a configuration name")
+        
+        # Load Settings
+        st.subheader("📂 Load Saved Settings")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a settings file",
+            type="json",
+            help="Upload a previously saved settings JSON file"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Read the uploaded file
+                settings_content = uploaded_file.read().decode('utf-8')
+                settings_dict = json.loads(settings_content)
+                
+                # Set loading flag to prevent recursive loops
+                st.session_state.loading_settings = True
+                
+                # Import the settings
+                success, message = import_settings(settings_dict)
+                
+                if success:
+                    st.success(f"✅ {message}")
+                    
+                    # Show some key loaded settings
+                    if "metadata" in settings_dict:
+                        metadata = settings_dict["metadata"]
+                        st.caption(f"📅 Exported: {metadata.get('export_timestamp', 'Unknown')}")
+                    
+                    # Trigger a safe rerun to refresh UI with loaded settings
+                    # Clear loading flag first, then rerun
+                    st.session_state.loading_settings = False
+                    safe_rerun("settings_loaded")
+                    
+                else:
+                    st.error(f"❌ {message}")
+                    
+            except json.JSONDecodeError:
+                st.error("❌ Invalid JSON file. Please upload a valid settings file.")
+            except Exception as e:
+                st.error(f"❌ Error loading file: {str(e)}")
 
     # Validate user age is less than retirement age
     if user_age >= ret_age:
@@ -1611,7 +1907,7 @@ real‑world spending patterns and country-specific social security systems.""")
                             )
                             
                             # Rerun to refresh calculations
-                            st.rerun()
+                            safe_rerun("spending_adjustment")
                     
                     except Exception as e:
                         st.error(
@@ -1724,7 +2020,7 @@ real‑world spending patterns and country-specific social security systems.""")
                     )
                     
                     # Create download button
-                    filename = f"retirement_analysis_{config['currency']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    filename = f"retirement_analysis_{config['currency']}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                     st.download_button(
                         label="💾 Download PDF Report",
                         data=pdf_bytes,
@@ -1938,6 +2234,11 @@ real‑world spending patterns and country-specific social security systems.""")
         """)
 
     st.caption(f"© 2025 • Country data from official government sources • Calculations in {config['currency']} ({currency_symbol})")
+    
+    # Reset rerun counter on successful page completion (no reruns triggered)
+    if st.session_state.rerun_count > 0:
+        logger.info(f"Page render completed successfully. Resetting rerun counter from {st.session_state.rerun_count} to 0")
+        st.session_state.rerun_count = 0
 
 
 if __name__ == "__main__":
