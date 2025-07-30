@@ -1194,8 +1194,9 @@ def safe_rerun(reason: str = "unknown"):
     
     # Check if we're already in a rerun loop
     if st.session_state.rerun_count >= MAX_RERUNS:
-        st.warning("⚠️ **Please refresh the page**: The app detected unusual activity and needs to be reloaded.")
         logger.warning(f"Prevented infinite rerun loop. Reason: {reason}, Count: {st.session_state.rerun_count}")
+        # Reset counter to allow future user interactions
+        st.session_state.rerun_count = 0
         return False
     
     # Increment counter and track reason
@@ -1226,7 +1227,7 @@ real‑world spending patterns and country-specific social security systems.""")
         st.session_state.last_rerun_reason = None
     
     # Reset rerun count on fresh page load (when no other state exists)
-    if len(st.session_state.keys()) <= 4:  # Only has our new guard keys
+    if len(st.session_state.keys()) <= 4:  # Only has the basic guard keys
         st.session_state.rerun_count = 0
     
     # Initialize session state for wealth accumulator
@@ -1741,10 +1742,14 @@ real‑world spending patterns and country-specific social security systems.""")
                         metadata = settings_dict["metadata"]
                         st.caption(f"📅 Exported: {metadata.get('export_timestamp', 'Unknown')}")
                     
-                    # Trigger a safe rerun to refresh UI with loaded settings
-                    # Clear loading flag first, then rerun
+                    # Clear loading flag and trigger rerun to refresh UI (only once)
                     st.session_state.loading_settings = False
-                    safe_rerun("settings_loaded")
+                    if not st.session_state.get('settings_rerun_done', False):
+                        st.session_state.settings_rerun_done = True
+                        logger.info("Settings loaded successfully - refreshing UI")
+                        st.rerun()
+                    else:
+                        logger.info("Settings loaded successfully - UI already refreshed")
                     
                 else:
                     st.error(f"❌ {message}")
@@ -1973,7 +1978,6 @@ real‑world spending patterns and country-specific social security systems.""")
         if st.button(
             "📄 Export to PDF",
             help="Download a comprehensive PDF report with all assumptions, calculations, chart, and data table",
-            key="export_pdf_btn",
             use_container_width=True
         ):
             try:
