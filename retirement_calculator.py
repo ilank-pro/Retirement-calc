@@ -1348,15 +1348,6 @@ real‑world spending patterns and country-specific social security systems.""")
         # Savings Accounts Section
         st.subheader("💳 Savings Accounts")
         
-        # Store previous values before rendering widgets for change detection
-        previous_account_values = []
-        for i, account in enumerate(st.session_state.savings_accounts):
-            previous_account_values.append({
-                'amount': account['amount'],
-                'roi': account['roi'],
-                'monthly_deposit': account.get('monthly_deposit', 0)
-            })
-        
         # Add new savings account
         col1, col2 = st.columns([4, 1])
         with col1:
@@ -1374,6 +1365,18 @@ real‑world spending patterns and country-specific social security systems.""")
                     })
                     safe_rerun("add_savings_account")
         
+        # Store previous values before rendering widgets for change detection
+        # This must happen AFTER account additions to ensure correct length matching
+        previous_account_values = []
+        for i, account in enumerate(st.session_state.savings_accounts):
+            previous_account_values.append({
+                'amount': account['amount'],
+                'roi': account['roi'],
+                'monthly_deposit': account.get('monthly_deposit', 0)
+            })
+        
+        logger.info(f"📊 Storing {len(previous_account_values)} previous account values for change detection")
+        
         # Display existing savings accounts
         accounts_to_remove = []
         try:
@@ -1388,12 +1391,12 @@ real‑world spending patterns and country-specific social security systems.""")
                     with col2:
                         # Enable/disable toggle
                         toggle_text = "✅" if account.get('enabled', True) else "❌"
-                        if st.button(toggle_text, help="Enable/disable account"):
+                        if st.button(toggle_text, help="Enable/disable account", key=f"toggle_{i}_{account['name']}"):
                             account['enabled'] = not account.get('enabled', True)
                             safe_rerun("toggle_savings_account")
                     
                     with col3:
-                        if st.button("🗑️", help="Remove account"):
+                        if st.button("🗑️", help="Remove account", key=f"remove_{i}_{account['name']}"):
                             accounts_to_remove.append(i)
                     
                     # Row 2: Amount input and ROI controls
@@ -1449,7 +1452,12 @@ real‑world spending patterns and country-specific social security systems.""")
                             
                     st.divider()
         except Exception as e:
-            st.error("⚠️ **Error loading savings accounts**: Please refresh the page or reload your settings.")
+            logger.error(f"❌ EXCEPTION in savings accounts rendering: {type(e).__name__}: {str(e)}")
+            logger.error(f"❌ Current savings_accounts length: {len(st.session_state.savings_accounts)}")
+            logger.error(f"❌ Previous values length: {len(previous_account_values) if 'previous_account_values' in locals() else 'N/A'}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+            st.error(f"⚠️ **Error loading savings accounts**: {str(e)}. Check logs for details.")
         
         # Remove accounts marked for deletion
         for i in reversed(accounts_to_remove):
@@ -1550,9 +1558,12 @@ real‑world spending patterns and country-specific social security systems.""")
         
         # Check if any savings account values have changed by comparing with previous values
         logger.info(f"Checking {len(st.session_state.savings_accounts)} savings accounts for changes")
+        logger.info(f"Previous values captured: {len(previous_account_values)}")
+        
         for i, account in enumerate(st.session_state.savings_accounts):
             if i >= len(previous_account_values):
-                # New account added, skip change detection for this one
+                # New account added during this session, skip change detection for this one
+                logger.info(f"  Account {i} ({account['name']}): NEW ACCOUNT - skipping change detection")
                 continue
                 
             account_amount_key = f"account_amount_{i}_{account['name']}"
