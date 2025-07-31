@@ -2169,13 +2169,28 @@ real‑world spending patterns and country-specific social security systems.""")
         
         if uploaded_file is not None:
             try:
-                # Only import settings if we haven't already processed this upload
-                # This prevents re-import during delayed reruns
-                if not st.session_state.get('settings_rerun_done', False):
-                    logger.info(f"📥 LEGITIMATE SETTINGS UPLOAD: Processing uploaded file")
-                    # Read the uploaded file
-                    settings_content = uploaded_file.read().decode('utf-8')
+                # Read the uploaded file content
+                settings_content = uploaded_file.read().decode('utf-8')
+                
+                # Generate hash of file content to prevent re-importing same file
+                import hashlib
+                file_hash = hashlib.md5(settings_content.encode()).hexdigest()
+                last_processed_hash = st.session_state.get('last_settings_hash', None)
+                
+                logger.info(f"📥 FILE UPLOAD DETECTED:")
+                logger.info(f"  Current file hash: {file_hash}")
+                logger.info(f"  Last processed hash: {last_processed_hash}")
+                logger.info(f"  settings_rerun_done: {st.session_state.get('settings_rerun_done', False)}")
+                
+                # Only import if this is a new file or we haven't processed this upload yet
+                if (file_hash != last_processed_hash and 
+                    not st.session_state.get('settings_rerun_done', False)):
+                    
+                    logger.info(f"📥 LEGITIMATE SETTINGS UPLOAD: Processing new file")
                     settings_dict = json.loads(settings_content)
+                    
+                    # Store the hash of the file we're processing
+                    st.session_state.last_settings_hash = file_hash
                     
                     # Set loading flag to prevent recursive loops
                     st.session_state.loading_settings = True
@@ -2183,7 +2198,10 @@ real‑world spending patterns and country-specific social security systems.""")
                     # Import the settings
                     success, message = import_settings(settings_dict)
                 else:
-                    logger.info(f"📥 SETTINGS ALREADY PROCESSED: Skipping re-import")
+                    if file_hash == last_processed_hash:
+                        logger.info(f"📥 SAME FILE ALREADY PROCESSED: Skipping re-import (hash match)")
+                    else:
+                        logger.info(f"📥 SETTINGS ALREADY PROCESSED: Skipping re-import (rerun_done=True)")
                     # Settings already imported, just show success message
                     success = True
                     message = "Settings already loaded"
