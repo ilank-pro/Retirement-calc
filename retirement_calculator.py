@@ -203,14 +203,46 @@ def format_currency(amount: float, currency_symbol: str) -> str:
 
 def on_savings_account_change():
     """Callback for when savings account values change."""
+    # Prevent callbacks during settings processing to avoid cascade issues
+    if st.session_state.get('loading_settings', False):
+        logger.info("🚫 Blocking savings_account_change callback during settings processing")
+        return
+    
     # Reset the settings rerun flag to allow UI updates after settings load
     if 'settings_rerun_done' in st.session_state:
         st.session_state.settings_rerun_done = False
     safe_rerun("savings_account_changed")
 
 
+def cleanup_orphaned_expense_keys():
+    """Remove orphaned expense widget keys from session state."""
+    current_expense_ids = {expense.get('id') for expense in st.session_state.get('planned_expenses', [])}
+    keys_to_remove = []
+    
+    for key in st.session_state.keys():
+        if key.startswith(('expense_amount_exp_', 'expense_age_exp_', 'toggle_expense_exp_', 'remove_expense_exp_')):
+            # Extract expense ID from key (format: expense_amount_exp_ID)
+            parts = key.split('_')
+            if len(parts) >= 4:
+                expense_id = '_'.join(parts[3:])  # Handle IDs that might contain underscores
+                if expense_id not in current_expense_ids:
+                    keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        logger.info(f"🧹 Cleaning orphaned expense key: {key}")
+        del st.session_state[key]
+    
+    if keys_to_remove:
+        logger.info(f"🧹 Cleaned up {len(keys_to_remove)} orphaned expense keys")
+
+
 def on_planned_expense_change():
     """Callback for when planned expense values change."""
+    # Prevent callbacks during settings processing to avoid cascade issues
+    if st.session_state.get('loading_settings', False):
+        logger.info("🚫 Blocking planned_expense_change callback during settings processing")
+        return
+    
     # Reset the settings rerun flag to allow UI updates after settings load
     if 'settings_rerun_done' in st.session_state:
         st.session_state.settings_rerun_done = False
@@ -1176,10 +1208,18 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
             st.session_state.savings_accounts = valid_accounts
             imported_settings.append(f"savings_accounts: {len(valid_accounts)} accounts")
         
+        # Clean up existing expense widget keys before importing new expenses
+        # This prevents orphaned keys from conflicting with newly imported expenses
+        logger.info("🧹 PRE-SETTINGS: Cleaning up existing expense widget keys")
+        cleanup_orphaned_expense_keys()
+        
         # Import planned expenses with validation
         if "planned_expenses" in wealth and isinstance(wealth["planned_expenses"], list):
+            logger.info(f"📥 IMPORTING EXPENSES: Found {len(wealth['planned_expenses'])} expenses in settings")
+            logger.info(f"📥 Current expenses before import: {len(st.session_state.get('planned_expenses', []))}")
+            
             valid_expenses = []
-            for expense in wealth["planned_expenses"]:
+            for i, expense in enumerate(wealth["planned_expenses"]):
                 if (isinstance(expense, dict) and 
                     "name" in expense and isinstance(expense["name"], str) and
                     "amount" in expense and isinstance(expense["amount"], (int, float)) and expense["amount"] >= 0 and
@@ -1188,7 +1228,10 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
                     
                     # Generate ID if not present (backwards compatibility)
                     import time
-                    expense_id = expense.get("id", f"exp_{int(time.time() * 1000000)}")
+                    original_id = expense.get("id")
+                    expense_id = original_id if original_id else f"exp_{int(time.time() * 1000000)}_{i}"
+                    
+                    logger.info(f"  📋 Expense {i}: '{expense['name']}' ID: {original_id} -> {expense_id}")
                     
                     valid_expense = {
                         "id": expense_id,
@@ -1199,8 +1242,38 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
                     }
                     valid_expenses.append(valid_expense)
             
-            st.session_state.planned_expenses = valid_expenses
-            imported_settings.append(f"planned_expenses: {len(valid_expenses)} expenses")
+            logger.info(f"📥 Importing {len(valid_expenses)} valid expenses into session state")
+            
+            # Merge strategy: Preserve existing expenses that aren't in settings, import/update ones that are
+            existing_expenses = st.session_state.get('planned_expenses', [])
+            logger.info(f"🔄 MERGE: Found {len(existing_expenses)} existing expenses before merge")
+            
+            # Get IDs of expenses being imported from settings
+            imported_expense_ids = {exp['id'] for exp in valid_expenses}
+            logger.info(f"🔄 MERGE: Importing expense IDs: {imported_expense_ids}")
+            
+            # Keep existing expenses that are NOT in the settings file (preserve user additions)
+            preserved_expenses = []
+            for existing_exp in existing_expenses:
+                existing_id = existing_exp.get('id')
+                if existing_id and existing_id not in imported_expense_ids:
+                    preserved_expenses.append(existing_exp)
+                    logger.info(f"🔄 MERGE: Preserving existing expense: {existing_exp['name']} (ID: {existing_id})")
+            
+            # Combine preserved expenses with imported ones
+            merged_expenses = preserved_expenses + valid_expenses
+            logger.info(f"🔄 MERGE: Final merged list: {len(preserved_expenses)} preserved + {len(valid_expenses)} imported = {len(merged_expenses)} total")
+            
+            st.session_state.planned_expenses = merged_expenses
+            imported_settings.append(f"planned_expenses: {len(valid_expenses)} imported, {len(preserved_expenses)} preserved, {len(merged_expenses)} total")
+            
+            # Clean up any remaining orphaned expense widget keys after import
+            logger.info("🧹 POST-SETTINGS: Final cleanup of orphaned expense widget keys")
+            cleanup_orphaned_expense_keys()
+            
+            # Reset loading_settings flag immediately after expense import to allow callbacks
+            logger.info("🔓 RESETTING loading_settings flag - expense widgets now active")
+            st.session_state.loading_settings = False
         
         # Create clean success message
         if imported_settings:
@@ -1511,6 +1584,10 @@ real‑world spending patterns and country-specific social security systems.""")
         logger.info(f"  Current planned_expenses count: {len(st.session_state.planned_expenses)}")
         for i, exp in enumerate(st.session_state.planned_expenses):
             logger.info(f"    [{i}] ID: {exp.get('id', 'NO_ID')}, Name: {exp.get('name', 'NO_NAME')}")
+            
+        # Clean up orphaned widget keys when no expenses exist
+        if len(st.session_state.planned_expenses) == 0:
+            cleanup_orphaned_expense_keys()
         
         # Add new planned expense
         col1, col2 = st.columns([4, 1])
@@ -1521,23 +1598,56 @@ real‑world spending patterns and country-specific social security systems.""")
             if st.button("➕", help="Add expense"):
                 if new_expense_name:
                     import time
-                    expense_id = f"exp_{int(time.time() * 1000000)}"  # Microsecond timestamp for uniqueness
+                    import random
+                    
+                    # Generate truly unique expense ID with collision detection
+                    existing_ids = {exp.get('id') for exp in st.session_state.planned_expenses}
+                    max_attempts = 10
+                    for attempt in range(max_attempts):
+                        timestamp = int(time.time() * 1000000)
+                        random_suffix = random.randint(1000, 9999)
+                        expense_id = f"exp_{timestamp}_{random_suffix}"
+                        if expense_id not in existing_ids:
+                            break
+                        logger.warning(f"⚠️ ID collision attempt {attempt + 1}: {expense_id} already exists, retrying...")
+                        time.sleep(0.001)  # Small delay to ensure different timestamp
+                    else:
+                        logger.error(f"🚨 FAILED to generate unique expense ID after {max_attempts} attempts!")
+                        expense_id = f"exp_fallback_{timestamp}_{random_suffix}"
                     
                     logger.info(f"🔥 ADDING NEW EXPENSE:")
                     logger.info(f"  Before add - count: {len(st.session_state.planned_expenses)}")
-                    logger.info(f"  Adding expense: ID={expense_id}, Name={new_expense_name}")
+                    logger.info(f"  Generated expense ID: {expense_id}")
+                    logger.info(f"  New expense name: {new_expense_name}")
                     
-                    st.session_state.planned_expenses.append({
+                    # Log current expenses before addition
+                    logger.info(f"  Current expenses before add:")
+                    for i, exp in enumerate(st.session_state.planned_expenses):
+                        logger.info(f"    [{i}] ID: {exp.get('id')}, Name: {exp.get('name')}, Amount: {exp.get('amount')}, Age: {exp.get('age')}")
+                    
+                    # Check for ID collisions
+                    existing_ids = [exp.get('id') for exp in st.session_state.planned_expenses]
+                    if expense_id in existing_ids:
+                        logger.error(f"🚨 ID COLLISION DETECTED! Generated ID {expense_id} already exists in: {existing_ids}")
+                    
+                    # Create new expense object
+                    new_expense = {
                         'id': expense_id,
                         'name': new_expense_name,
                         'amount': 0,
                         'age': user_age + 5,
                         'enabled': True
-                    })
+                    }
+                    logger.info(f"  New expense object: {new_expense}")
+                    
+                    # Append to list
+                    logger.info(f"  Appending to planned_expenses list...")
+                    st.session_state.planned_expenses.append(new_expense)
                     
                     logger.info(f"  After add - count: {len(st.session_state.planned_expenses)}")
+                    logger.info(f"  Final expenses list after add:")
                     for i, exp in enumerate(st.session_state.planned_expenses):
-                        logger.info(f"    [{i}] ID: {exp.get('id')}, Name: {exp.get('name')}")
+                        logger.info(f"    [{i}] ID: {exp.get('id')}, Name: {exp.get('name')}, Amount: {exp.get('amount')}, Age: {exp.get('age')}")
                     
                     # Clear settings rerun flag to prevent state conflicts
                     if 'settings_rerun_done' in st.session_state:
@@ -1561,6 +1671,12 @@ real‑world spending patterns and country-specific social security systems.""")
         
         # Display existing planned expenses
         expenses_to_remove = []
+        logger.info(f"🎨 RENDERING {len(st.session_state.planned_expenses)} EXPENSES:")
+        
+        # Check for expense widget keys in session state
+        expense_widget_keys = [key for key in st.session_state.keys() if key.startswith('expense_')]
+        logger.info(f"🔍 Current expense widget keys in session state: {expense_widget_keys}")
+        
         for i, expense in enumerate(st.session_state.planned_expenses):
             # Ensure backwards compatibility - add ID if missing
             if 'id' not in expense:
@@ -1589,6 +1705,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 
                 with col1:
                     expense_amount_key = f"expense_amount_{expense['id']}"
+                    logger.info(f"  🔑 Expense {i} ({expense['name']}): amount key = {expense_amount_key}")
                     st.number_input(
                         "Amount",
                         value=int(float(expense['amount'])),
@@ -1600,7 +1717,9 @@ real‑world spending patterns and country-specific social security systems.""")
                     )
                     # Get the current value from session state (don't mutate during rendering)
                     if expense_amount_key in st.session_state:
-                        expense['amount'] = st.session_state[expense_amount_key]
+                        widget_value = st.session_state[expense_amount_key]
+                        logger.info(f"    💰 Reading amount from widget {expense_amount_key}: {widget_value} -> expense['amount']")
+                        expense['amount'] = widget_value
                     # Display currency symbol below the input (matching savings accounts style)
                     st.caption(f"{currency_symbol}{expense['amount']:,}")
                 
@@ -1611,6 +1730,7 @@ real‑world spending patterns and country-specific social security systems.""")
                     was_adjusted = adjusted_expense_age != original_age
                     
                     expense_age_key = f"expense_age_{expense['id']}"
+                    logger.info(f"  🔑 Expense {i} ({expense['name']}): age key = {expense_age_key}")
                     st.number_input(
                         "Age",
                         min_value=float(user_age),
@@ -1623,7 +1743,9 @@ real‑world spending patterns and country-specific social security systems.""")
                     )
                     # Get the current value from session state (don't mutate during rendering)
                     if expense_age_key in st.session_state:
-                        expense['age'] = int(st.session_state[expense_age_key])
+                        widget_age_value = int(st.session_state[expense_age_key])
+                        logger.info(f"    📅 Reading age from widget {expense_age_key}: {widget_age_value} -> expense['age']")
+                        expense['age'] = widget_age_value
                     
                     # Show caption and warning if needed (matching savings accounts style)
                     if was_adjusted:
@@ -1639,6 +1761,8 @@ real‑world spending patterns and country-specific social security systems.""")
                 exp for exp in st.session_state.planned_expenses 
                 if exp.get('id') != expense_id
             ]
+            # Clean up widget keys for the removed expense
+            cleanup_orphaned_expense_keys()
             # Clear settings rerun flag to prevent state conflicts
             if 'settings_rerun_done' in st.session_state:
                 st.session_state.settings_rerun_done = False
@@ -1695,11 +1819,17 @@ real‑world spending patterns and country-specific social security systems.""")
         logger.info(f"Checking {len(st.session_state.planned_expenses)} planned expenses for changes")
         logger.info(f"Previous expense values captured: {len(previous_expense_values)}")
         
+        # Skip expense change detection if settings were just loaded (expenses just imported)
+        settings_just_loaded = st.session_state.get('settings_rerun_done', False)
+        if settings_just_loaded:
+            logger.info("⏭️ SKIPPING expense change detection - settings were just loaded")
+        
         for expense in st.session_state.planned_expenses:
             expense_id = expense.get('id')
-            if not expense_id or expense_id not in previous_expense_values:
-                # New expense added during this session, skip change detection for this one
-                logger.info(f"  Expense ({expense['name']}): NEW EXPENSE - skipping change detection")
+            if not expense_id or expense_id not in previous_expense_values or settings_just_loaded:
+                # Skip change detection for: new expenses, missing IDs, or when settings just loaded
+                reason = "SETTINGS JUST LOADED" if settings_just_loaded else "NEW EXPENSE"
+                logger.info(f"  Expense ({expense['name']}): {reason} - skipping change detection")
                 continue
                 
             prev_expense = previous_expense_values[expense_id]
@@ -1958,15 +2088,22 @@ real‑world spending patterns and country-specific social security systems.""")
         
         if uploaded_file is not None:
             try:
-                # Read the uploaded file
-                settings_content = uploaded_file.read().decode('utf-8')
-                settings_dict = json.loads(settings_content)
-                
-                # Set loading flag to prevent recursive loops
-                st.session_state.loading_settings = True
-                
-                # Import the settings
-                success, message = import_settings(settings_dict)
+                # Only import settings if we haven't already processed this upload
+                # This prevents re-import during delayed reruns
+                if not st.session_state.get('settings_rerun_done', False):
+                    # Read the uploaded file
+                    settings_content = uploaded_file.read().decode('utf-8')
+                    settings_dict = json.loads(settings_content)
+                    
+                    # Set loading flag to prevent recursive loops
+                    st.session_state.loading_settings = True
+                    
+                    # Import the settings
+                    success, message = import_settings(settings_dict)
+                else:
+                    # Settings already imported, just show success message
+                    success = True
+                    message = "Settings already loaded"
                 
                 if success:
                     st.success(f"✅ {message}")
@@ -1976,7 +2113,7 @@ real‑world spending patterns and country-specific social security systems.""")
                         metadata = settings_dict["metadata"]
                         st.caption(f"📅 Exported: {metadata.get('export_timestamp', 'Unknown')}")
                     
-                    # Clear loading flag and trigger rerun to refresh UI (only once)
+                    # Ensure loading flag is cleared (defensive reset - should already be False from import)
                     st.session_state.loading_settings = False
                     if not st.session_state.get('settings_rerun_done', False):
                         st.session_state.settings_rerun_done = True
