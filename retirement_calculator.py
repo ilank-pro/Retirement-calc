@@ -1496,12 +1496,12 @@ real‑world spending patterns and country-specific social security systems.""")
                 with col2:
                     # Enable/disable toggle
                     toggle_text = "✅" if expense.get('enabled', True) else "❌"
-                    if st.button(toggle_text, help="Enable/disable expense"):
+                    if st.button(toggle_text, help="Enable/disable expense", key=f"toggle_expense_{i}_{expense['name']}"):
                         expense['enabled'] = not expense.get('enabled', True)
                         safe_rerun("toggle_planned_expense")
                 
                 with col3:
-                    if st.button("🗑️", help="Remove expense"):
+                    if st.button("🗑️", help="Remove expense", key=f"remove_expense_{i}_{expense['name']}"):
                         expenses_to_remove.append(i)
                 
                 # Row 2: Amount input and age input
