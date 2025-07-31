@@ -1159,7 +1159,12 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
                     "roi" in account and isinstance(account["roi"], (int, float)) and 0 <= account["roi"] <= 1 and
                     "enabled" in account and isinstance(account["enabled"], bool)):
                     
+                    # Generate ID if not present (backwards compatibility)
+                    import time
+                    account_id = account.get("id", f"acc_{int(time.time() * 1000000)}")
+                    
                     valid_account = {
+                        "id": account_id,
                         "name": account["name"],
                         "amount": float(account["amount"]),
                         "roi": float(account["roi"]),
@@ -1181,7 +1186,12 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
                     "age" in expense and isinstance(expense["age"], (int, float)) and 18 <= expense["age"] <= 100 and
                     "enabled" in expense and isinstance(expense["enabled"], bool)):
                     
+                    # Generate ID if not present (backwards compatibility)
+                    import time
+                    expense_id = expense.get("id", f"exp_{int(time.time() * 1000000)}")
+                    
                     valid_expense = {
+                        "id": expense_id,
                         "name": expense["name"],
                         "amount": float(expense["amount"]),
                         "age": int(expense["age"]),
@@ -1356,24 +1366,34 @@ real‑world spending patterns and country-specific social security systems.""")
             st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)  # Align button with input bottom
             if st.button("➕", help="Add account"):
                 if new_account_name:
+                    import time
+                    account_id = f"acc_{int(time.time() * 1000000)}"  # Microsecond timestamp for uniqueness
                     st.session_state.savings_accounts.append({
+                        'id': account_id,
                         'name': new_account_name,
                         'amount': 0,
                         'roi': 0.04,
                         'monthly_deposit': 0,
                         'enabled': True
                     })
+                    # Clear settings rerun flag to prevent state conflicts
+                    if 'settings_rerun_done' in st.session_state:
+                        st.session_state.settings_rerun_done = False
                     safe_rerun("add_savings_account")
         
         # Store previous values before rendering widgets for change detection
         # This must happen AFTER account additions to ensure correct length matching
-        previous_account_values = []
-        for i, account in enumerate(st.session_state.savings_accounts):
-            previous_account_values.append({
+        previous_account_values = {}
+        for account in st.session_state.savings_accounts:
+            # Ensure account has ID for tracking
+            if 'id' not in account:
+                import time
+                account['id'] = f"acc_{int(time.time() * 1000000)}"
+            previous_account_values[account['id']] = {
                 'amount': account['amount'],
                 'roi': account['roi'],
                 'monthly_deposit': account.get('monthly_deposit', 0)
-            })
+            }
         
         logger.info(f"📊 Storing {len(previous_account_values)} previous account values for change detection")
         
@@ -1381,6 +1401,10 @@ real‑world spending patterns and country-specific social security systems.""")
         accounts_to_remove = []
         try:
             for i, account in enumerate(st.session_state.savings_accounts):
+                # Ensure backwards compatibility - add ID if missing
+                if 'id' not in account:
+                    import time
+                    account['id'] = f"acc_{int(time.time() * 1000000)}_{i}"  # Use timestamp + index for uniqueness
                 with st.container():
                     # Row 1: Account name, enable/disable toggle, and remove button
                     col1, col2, col3 = st.columns([4, 1, 1])
@@ -1391,20 +1415,20 @@ real‑world spending patterns and country-specific social security systems.""")
                     with col2:
                         # Enable/disable toggle
                         toggle_text = "✅" if account.get('enabled', True) else "❌"
-                        if st.button(toggle_text, help="Enable/disable account", key=f"toggle_{i}_{account['name']}"):
+                        if st.button(toggle_text, help="Enable/disable account", key=f"toggle_{account['id']}"):
                             account['enabled'] = not account.get('enabled', True)
                             safe_rerun("toggle_savings_account")
                     
                     with col3:
-                        if st.button("🗑️", help="Remove account", key=f"remove_{i}_{account['name']}"):
-                            accounts_to_remove.append(i)
+                        if st.button("🗑️", help="Remove account", key=f"remove_{account['id']}"):
+                            accounts_to_remove.append(account['id'])
                     
                     # Row 2: Amount input and ROI controls
                     col1, col2 = st.columns([3, 2])
                     
                     with col1:
-                        account_amount_key = f"account_amount_{i}_{account['name']}"
-                        account['amount'] = st.number_input(
+                        account_amount_key = f"account_amount_{account['id']}"
+                        st.number_input(
                             "Amount",
                             value=int(float(account['amount'])),
                             step=1000,
@@ -1412,13 +1436,16 @@ real‑world spending patterns and country-specific social security systems.""")
                             format="%d",
                             key=account_amount_key
                         )
+                        # Get the current value from session state (don't mutate during rendering)
+                        if account_amount_key in st.session_state:
+                            account['amount'] = st.session_state[account_amount_key]
                         # Display currency symbol below the input
                         st.caption(f"{currency_symbol}{account['amount']:,}")
                     
                     with col2:
                         # ROI input control (matching amount input style)
-                        account_roi_key = f"account_roi_{i}_{account['name']}"
-                        account['roi'] = st.number_input(
+                        account_roi_key = f"account_roi_{account['id']}"
+                        st.number_input(
                             "ROI %",
                             min_value=0.0,
                             value=account['roi'] * 100,
@@ -1426,7 +1453,10 @@ real‑world spending patterns and country-specific social security systems.""")
                             format="%.1f",
                             label_visibility="collapsed",
                             key=account_roi_key
-                        ) / 100
+                        )
+                        # Get the current value from session state (don't mutate during rendering)
+                        if account_roi_key in st.session_state:
+                            account['roi'] = st.session_state[account_roi_key] / 100
                         # Display ROI caption below the input (matching amount style)
                         st.caption(f"ROI: {account['roi']*100:.1f}%")
                 
@@ -1434,8 +1464,8 @@ real‑world spending patterns and country-specific social security systems.""")
                     col1, col2 = st.columns([3, 2])
                     
                     with col1:
-                        account_deposit_key = f"account_deposit_{i}_{account['name']}"
-                        account['monthly_deposit'] = st.number_input(
+                        account_deposit_key = f"account_deposit_{account['id']}"
+                        st.number_input(
                             "Monthly Deposit",
                             value=int(float(account.get('monthly_deposit', 0))),
                             step=100,
@@ -1443,6 +1473,9 @@ real‑world spending patterns and country-specific social security systems.""")
                             format="%d",
                             key=account_deposit_key
                         )
+                        # Get the current value from session state (don't mutate during rendering)
+                        if account_deposit_key in st.session_state:
+                            account['monthly_deposit'] = st.session_state[account_deposit_key]
                         # Display currency symbol below the input (matching amount style)
                         st.caption(f"{currency_symbol}{account['monthly_deposit']:,}/month")
                     
@@ -1459,13 +1492,25 @@ real‑world spending patterns and country-specific social security systems.""")
             logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             st.error(f"⚠️ **Error loading savings accounts**: {str(e)}. Check logs for details.")
         
-        # Remove accounts marked for deletion
-        for i in reversed(accounts_to_remove):
-            del st.session_state.savings_accounts[i]
+        # Remove accounts marked for deletion (by ID)
+        for account_id in accounts_to_remove:
+            st.session_state.savings_accounts = [
+                acc for acc in st.session_state.savings_accounts 
+                if acc.get('id') != account_id
+            ]
+            # Clear settings rerun flag to prevent state conflicts
+            if 'settings_rerun_done' in st.session_state:
+                st.session_state.settings_rerun_done = False
             safe_rerun("remove_savings_account")
         
         # Planned Expenses Section
         st.subheader("🏠 Planned Expenses")
+        
+        # Debug logging - track planned_expenses state
+        logger.info(f"🏠 PLANNED EXPENSES SECTION START:")
+        logger.info(f"  Current planned_expenses count: {len(st.session_state.planned_expenses)}")
+        for i, exp in enumerate(st.session_state.planned_expenses):
+            logger.info(f"    [{i}] ID: {exp.get('id', 'NO_ID')}, Name: {exp.get('name', 'NO_NAME')}")
         
         # Add new planned expense
         col1, col2 = st.columns([4, 1])
@@ -1475,17 +1520,52 @@ real‑world spending patterns and country-specific social security systems.""")
             st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)  # Align button with input bottom
             if st.button("➕", help="Add expense"):
                 if new_expense_name:
+                    import time
+                    expense_id = f"exp_{int(time.time() * 1000000)}"  # Microsecond timestamp for uniqueness
+                    
+                    logger.info(f"🔥 ADDING NEW EXPENSE:")
+                    logger.info(f"  Before add - count: {len(st.session_state.planned_expenses)}")
+                    logger.info(f"  Adding expense: ID={expense_id}, Name={new_expense_name}")
+                    
                     st.session_state.planned_expenses.append({
+                        'id': expense_id,
                         'name': new_expense_name,
                         'amount': 0,
                         'age': user_age + 5,
                         'enabled': True
                     })
+                    
+                    logger.info(f"  After add - count: {len(st.session_state.planned_expenses)}")
+                    for i, exp in enumerate(st.session_state.planned_expenses):
+                        logger.info(f"    [{i}] ID: {exp.get('id')}, Name: {exp.get('name')}")
+                    
+                    # Clear settings rerun flag to prevent state conflicts
+                    if 'settings_rerun_done' in st.session_state:
+                        st.session_state.settings_rerun_done = False
                     safe_rerun("add_planned_expense")
+        
+        # Store previous expense values before rendering widgets for change detection
+        # This must happen AFTER expense additions to ensure correct length matching
+        previous_expense_values = {}
+        for expense in st.session_state.planned_expenses:
+            # Ensure expense has ID for tracking
+            if 'id' not in expense:
+                import time
+                expense['id'] = f"exp_{int(time.time() * 1000000)}"
+            previous_expense_values[expense['id']] = {
+                'amount': expense['amount'],
+                'age': expense['age']
+            }
+        
+        logger.info(f"📊 Storing {len(previous_expense_values)} previous expense values for change detection")
         
         # Display existing planned expenses
         expenses_to_remove = []
         for i, expense in enumerate(st.session_state.planned_expenses):
+            # Ensure backwards compatibility - add ID if missing
+            if 'id' not in expense:
+                import time
+                expense['id'] = f"exp_{int(time.time() * 1000000)}_{i}"  # Use timestamp + index for uniqueness
             with st.container():
                 # Row 1: Expense name, enable/disable toggle, and remove button
                 col1, col2, col3 = st.columns([4, 1, 1])
@@ -1496,27 +1576,31 @@ real‑world spending patterns and country-specific social security systems.""")
                 with col2:
                     # Enable/disable toggle
                     toggle_text = "✅" if expense.get('enabled', True) else "❌"
-                    if st.button(toggle_text, help="Enable/disable expense", key=f"toggle_expense_{i}_{expense['name']}"):
+                    if st.button(toggle_text, help="Enable/disable expense", key=f"toggle_expense_{expense['id']}"):
                         expense['enabled'] = not expense.get('enabled', True)
                         safe_rerun("toggle_planned_expense")
                 
                 with col3:
-                    if st.button("🗑️", help="Remove expense", key=f"remove_expense_{i}_{expense['name']}"):
-                        expenses_to_remove.append(i)
+                    if st.button("🗑️", help="Remove expense", key=f"remove_expense_{expense['id']}"):
+                        expenses_to_remove.append(expense['id'])
                 
                 # Row 2: Amount input and age input
                 col1, col2 = st.columns([3, 2])
                 
                 with col1:
-                    expense_amount_key = f"expense_amount_{i}_{expense['name']}"
-                    expense['amount'] = st.number_input(
+                    expense_amount_key = f"expense_amount_{expense['id']}"
+                    st.number_input(
                         "Amount",
                         value=int(float(expense['amount'])),
                         step=1000,
                         label_visibility="collapsed",
                         format="%d",
-                        key=expense_amount_key
+                        key=expense_amount_key,
+                        on_change=on_planned_expense_change
                     )
+                    # Get the current value from session state (don't mutate during rendering)
+                    if expense_amount_key in st.session_state:
+                        expense['amount'] = st.session_state[expense_amount_key]
                     # Display currency symbol below the input (matching savings accounts style)
                     st.caption(f"{currency_symbol}{expense['amount']:,}")
                 
@@ -1526,16 +1610,20 @@ real‑world spending patterns and country-specific social security systems.""")
                     adjusted_expense_age = max(expense['age'], user_age)
                     was_adjusted = adjusted_expense_age != original_age
                     
-                    expense_age_key = f"expense_age_{i}_{expense['name']}"
-                    expense['age'] = st.number_input(
+                    expense_age_key = f"expense_age_{expense['id']}"
+                    st.number_input(
                         "Age",
                         min_value=float(user_age),
                         max_value=80.0,
                         value=float(adjusted_expense_age),
                         step=1.0,
                         label_visibility="collapsed",
-                        key=expense_age_key
+                        key=expense_age_key,
+                        on_change=on_planned_expense_change
                     )
+                    # Get the current value from session state (don't mutate during rendering)
+                    if expense_age_key in st.session_state:
+                        expense['age'] = int(st.session_state[expense_age_key])
                     
                     # Show caption and warning if needed (matching savings accounts style)
                     if was_adjusted:
@@ -1545,9 +1633,15 @@ real‑world spending patterns and country-specific social security systems.""")
                         
                 st.divider()
         
-        # Remove expenses marked for deletion
-        for i in reversed(expenses_to_remove):
-            del st.session_state.planned_expenses[i]
+        # Remove expenses marked for deletion (by ID)
+        for expense_id in expenses_to_remove:
+            st.session_state.planned_expenses = [
+                exp for exp in st.session_state.planned_expenses 
+                if exp.get('id') != expense_id
+            ]
+            # Clear settings rerun flag to prevent state conflicts
+            if 'settings_rerun_done' in st.session_state:
+                st.session_state.settings_rerun_done = False
             safe_rerun("remove_planned_expense")
 
         # Check for changes in widget values and trigger rerun if needed
@@ -1560,19 +1654,16 @@ real‑world spending patterns and country-specific social security systems.""")
         logger.info(f"Checking {len(st.session_state.savings_accounts)} savings accounts for changes")
         logger.info(f"Previous values captured: {len(previous_account_values)}")
         
-        for i, account in enumerate(st.session_state.savings_accounts):
-            if i >= len(previous_account_values):
+        for account in st.session_state.savings_accounts:
+            account_id = account.get('id')
+            if not account_id or account_id not in previous_account_values:
                 # New account added during this session, skip change detection for this one
-                logger.info(f"  Account {i} ({account['name']}): NEW ACCOUNT - skipping change detection")
+                logger.info(f"  Account ({account['name']}): NEW ACCOUNT - skipping change detection")
                 continue
                 
-            account_amount_key = f"account_amount_{i}_{account['name']}"
-            account_roi_key = f"account_roi_{i}_{account['name']}"
-            account_deposit_key = f"account_deposit_{i}_{account['name']}"
+            previous = previous_account_values[account_id]
             
-            previous = previous_account_values[i]
-            
-            logger.info(f"🏦 Account {i} ({account['name']}):")
+            logger.info(f"🏦 Account ({account['name']}):")
             logger.info(f"  Previous amount: {previous['amount']}")
             logger.info(f"  Previous ROI: {previous['roi']}")
             logger.info(f"  Previous deposit: {previous['monthly_deposit']}")
@@ -1600,20 +1691,35 @@ real‑world spending patterns and country-specific social security systems.""")
             else:
                 logger.info(f"  ✅ Deposit unchanged")
         
-        # Check if any planned expense values have changed
-        for i, expense in enumerate(st.session_state.planned_expenses):
-            expense_amount_key = f"expense_amount_{i}_{expense['name']}"
-            expense_age_key = f"expense_age_{i}_{expense['name']}"
+        # Check if any planned expense values have changed by comparing with previous values
+        logger.info(f"Checking {len(st.session_state.planned_expenses)} planned expenses for changes")
+        logger.info(f"Previous expense values captured: {len(previous_expense_values)}")
+        
+        for expense in st.session_state.planned_expenses:
+            expense_id = expense.get('id')
+            if not expense_id or expense_id not in previous_expense_values:
+                # New expense added during this session, skip change detection for this one
+                logger.info(f"  Expense ({expense['name']}): NEW EXPENSE - skipping change detection")
+                continue
+                
+            prev_expense = previous_expense_values[expense_id]
+            logger.info(f"  Expense ({expense['name']}):")
+            logger.info(f"    Amount: {prev_expense['amount']} -> {expense['amount']}")
+            logger.info(f"    Age: {prev_expense['age']} -> {expense['age']}")
             
-            if expense_amount_key in st.session_state:
-                if st.session_state[expense_amount_key] != expense['amount']:
-                    expense['amount'] = st.session_state[expense_amount_key]
-                    expenses_changed = True
+            # Check for amount changes
+            if expense['amount'] != prev_expense['amount']:
+                logger.info(f"  💰 Amount changed from {prev_expense['amount']} to {expense['amount']}")
+                expenses_changed = True
+            else:
+                logger.info(f"  ✅ Amount unchanged")
             
-            if expense_age_key in st.session_state:
-                if st.session_state[expense_age_key] != expense['age']:
-                    expense['age'] = int(st.session_state[expense_age_key])
-                    expenses_changed = True
+            # Check for age changes  
+            if expense['age'] != prev_expense['age']:
+                logger.info(f"  📅 Age changed from {prev_expense['age']} to {expense['age']}")
+                expenses_changed = True
+            else:
+                logger.info(f"  ✅ Age unchanged")
         
         # Trigger rerun if changes detected (and reset settings flag if needed)
         logger.info(f"=== CHANGE DETECTION SUMMARY ===")
