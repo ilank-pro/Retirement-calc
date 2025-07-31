@@ -1099,6 +1099,18 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
     Returns:
         tuple: (success: bool, message: str)
     """
+    import traceback
+    logger.error(f"🚨🚨🚨 IMPORT_SETTINGS CALLED - THIS SHOULD ONLY HAPPEN ON FILE UPLOAD!")
+    logger.error(f"Call stack:")
+    for line in traceback.format_stack():
+        logger.error(f"  {line.strip()}")
+    
+    # SAFETY CHECK: Only allow settings import if we're actually processing a file upload
+    # This prevents inappropriate imports during ROI changes or other operations
+    if not st.session_state.get('loading_settings', False):
+        logger.error(f"🚨 BLOCKING INAPPROPRIATE SETTINGS IMPORT - loading_settings flag not set!")
+        return False, "Settings import blocked - not in file upload context"
+    
     try:
         # Validate basic structure
         if not isinstance(settings_dict, dict):
@@ -1183,6 +1195,8 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
         
         # Import savings accounts with validation
         if "savings_accounts" in wealth and isinstance(wealth["savings_accounts"], list):
+            logger.info(f"🚨 SETTINGS IMPORT TRIGGERED: About to import/merge savings accounts")
+            logger.info(f"🚨 Current app state - this should only happen during settings upload!")
             valid_accounts = []
             for account in wealth["savings_accounts"]:
                 if (isinstance(account, dict) and 
@@ -1461,17 +1475,43 @@ real‑world spending patterns and country-specific social security systems.""")
                 if new_account_name:
                     import time
                     account_id = f"acc_{int(time.time() * 1000000)}"  # Microsecond timestamp for uniqueness
-                    st.session_state.savings_accounts.append({
+                    
+                    logger.info(f"💰 ADDING NEW SAVINGS ACCOUNT:")
+                    logger.info(f"  Before add - count: {len(st.session_state.savings_accounts)}")
+                    logger.info(f"  Generated account ID: {account_id}")
+                    logger.info(f"  New account name: {new_account_name}")
+                    
+                    # Log current accounts before addition
+                    logger.info(f"  Current accounts before add:")
+                    for i, acc in enumerate(st.session_state.savings_accounts):
+                        logger.info(f"    [{i}] ID: {acc.get('id')}, Name: {acc.get('name')}, Amount: {acc.get('amount')}")
+                    
+                    # Check for ID collisions
+                    existing_ids = [acc.get('id') for acc in st.session_state.savings_accounts]
+                    if account_id in existing_ids:
+                        logger.error(f"🚨 ACCOUNT ID COLLISION! Generated ID {account_id} already exists in: {existing_ids}")
+                    
+                    # Create and append new account
+                    new_account = {
                         'id': account_id,
                         'name': new_account_name,
                         'amount': 0,
                         'roi': 0.04,
                         'monthly_deposit': 0,
                         'enabled': True
-                    })
-                    # Clear settings rerun flag to prevent state conflicts
-                    if 'settings_rerun_done' in st.session_state:
-                        st.session_state.settings_rerun_done = False
+                    }
+                    logger.info(f"  New account object: {new_account}")
+                    
+                    st.session_state.savings_accounts.append(new_account)
+                    
+                    logger.info(f"  After add - count: {len(st.session_state.savings_accounts)}")
+                    logger.info(f"  Final accounts list after add:")
+                    for i, acc in enumerate(st.session_state.savings_accounts):
+                        logger.info(f"    [{i}] ID: {acc.get('id')}, Name: {acc.get('name')}, Amount: {acc.get('amount')}")
+                    
+                    # Don't reset settings_rerun_done - this causes settings re-import on reruns
+                    # The flag should only be reset by actual settings uploads
+                    logger.info(f"💰 Account added successfully - NOT resetting settings_rerun_done flag")
                     safe_rerun("add_savings_account")
         
         # Store previous values before rendering widgets for change detection
@@ -1492,6 +1532,27 @@ real‑world spending patterns and country-specific social security systems.""")
         
         # Display existing savings accounts
         accounts_to_remove = []
+        logger.info(f"🏦 RENDERING {len(st.session_state.savings_accounts)} SAVINGS ACCOUNTS:")
+        
+        # Check for duplicate accounts by ID
+        account_ids = [acc.get('id') for acc in st.session_state.savings_accounts]
+        account_names = [acc.get('name') for acc in st.session_state.savings_accounts]
+        unique_ids = set(account_ids)
+        if len(account_ids) != len(unique_ids):
+            logger.error(f"🚨 DUPLICATE ACCOUNTS DETECTED!")
+            logger.error(f"  Total accounts: {len(account_ids)}")
+            logger.error(f"  Unique IDs: {len(unique_ids)}")
+            logger.error(f"  Account IDs: {account_ids}")
+            logger.error(f"  Account Names: {account_names}")
+            for acc_id in unique_ids:
+                count = account_ids.count(acc_id)
+                if count > 1:
+                    logger.error(f"  ID {acc_id} appears {count} times!")
+        
+        # Log all accounts being rendered
+        for i, acc in enumerate(st.session_state.savings_accounts):
+            logger.info(f"  🏦 Account {i}: ID={acc.get('id')}, Name={acc.get('name')}, Amount={acc.get('amount')}")
+        
         try:
             for i, account in enumerate(st.session_state.savings_accounts):
                 # Ensure backwards compatibility - add ID if missing
@@ -1591,9 +1652,9 @@ real‑world spending patterns and country-specific social security systems.""")
                 acc for acc in st.session_state.savings_accounts 
                 if acc.get('id') != account_id
             ]
-            # Clear settings rerun flag to prevent state conflicts
-            if 'settings_rerun_done' in st.session_state:
-                st.session_state.settings_rerun_done = False
+            # Don't reset settings_rerun_done - this causes settings re-import on reruns
+            # The flag should only be reset by actual settings uploads
+            logger.info(f"🏦 Account removed successfully - NOT resetting settings_rerun_done flag")
             safe_rerun("remove_savings_account")
         
         # Planned Expenses Section
@@ -1669,9 +1730,9 @@ real‑world spending patterns and country-specific social security systems.""")
                     for i, exp in enumerate(st.session_state.planned_expenses):
                         logger.info(f"    [{i}] ID: {exp.get('id')}, Name: {exp.get('name')}, Amount: {exp.get('amount')}, Age: {exp.get('age')}")
                     
-                    # Clear settings rerun flag to prevent state conflicts
-                    if 'settings_rerun_done' in st.session_state:
-                        st.session_state.settings_rerun_done = False
+                    # Don't reset settings_rerun_done - this causes settings re-import on reruns
+                    # The flag should only be reset by actual settings uploads
+                    logger.info(f"💸 Expense added successfully - NOT resetting settings_rerun_done flag")
                     safe_rerun("add_planned_expense")
         
         # Store previous expense values before rendering widgets for change detection
@@ -1783,9 +1844,9 @@ real‑world spending patterns and country-specific social security systems.""")
             ]
             # Clean up widget keys for the removed expense
             cleanup_orphaned_expense_keys()
-            # Clear settings rerun flag to prevent state conflicts
-            if 'settings_rerun_done' in st.session_state:
-                st.session_state.settings_rerun_done = False
+            # Don't reset settings_rerun_done - this causes settings re-import on reruns
+            # The flag should only be reset by actual settings uploads
+            logger.info(f"💸 Expense removed successfully - NOT resetting settings_rerun_done flag")
             safe_rerun("remove_planned_expense")
 
         # Check for changes in widget values and trigger rerun if needed
@@ -2111,6 +2172,7 @@ real‑world spending patterns and country-specific social security systems.""")
                 # Only import settings if we haven't already processed this upload
                 # This prevents re-import during delayed reruns
                 if not st.session_state.get('settings_rerun_done', False):
+                    logger.info(f"📥 LEGITIMATE SETTINGS UPLOAD: Processing uploaded file")
                     # Read the uploaded file
                     settings_content = uploaded_file.read().decode('utf-8')
                     settings_dict = json.loads(settings_content)
@@ -2121,6 +2183,7 @@ real‑world spending patterns and country-specific social security systems.""")
                     # Import the settings
                     success, message = import_settings(settings_dict)
                 else:
+                    logger.info(f"📥 SETTINGS ALREADY PROCESSED: Skipping re-import")
                     # Settings already imported, just show success message
                     success = True
                     message = "Settings already loaded"
