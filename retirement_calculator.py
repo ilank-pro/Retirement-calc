@@ -1205,8 +1205,28 @@ def import_settings(settings_dict: dict) -> tuple[bool, str]:
                     }
                     valid_accounts.append(valid_account)
             
-            st.session_state.savings_accounts = valid_accounts
-            imported_settings.append(f"savings_accounts: {len(valid_accounts)} accounts")
+            # Merge strategy: Preserve existing accounts that aren't in settings, import/update ones that are
+            existing_accounts = st.session_state.get('savings_accounts', [])
+            logger.info(f"🔄 SAVINGS MERGE: Found {len(existing_accounts)} existing accounts before merge")
+            
+            # Get IDs of accounts being imported from settings
+            imported_account_ids = {acc['id'] for acc in valid_accounts}
+            logger.info(f"🔄 SAVINGS MERGE: Importing account IDs: {imported_account_ids}")
+            
+            # Keep existing accounts that are NOT in the settings file (preserve user additions)
+            preserved_accounts = []
+            for existing_acc in existing_accounts:
+                existing_id = existing_acc.get('id')
+                if existing_id and existing_id not in imported_account_ids:
+                    preserved_accounts.append(existing_acc)
+                    logger.info(f"🔄 SAVINGS MERGE: Preserving existing account: {existing_acc['name']} (ID: {existing_id})")
+            
+            # Combine preserved accounts with imported ones
+            merged_accounts = preserved_accounts + valid_accounts
+            logger.info(f"🔄 SAVINGS MERGE: Final merged list: {len(preserved_accounts)} preserved + {len(valid_accounts)} imported = {len(merged_accounts)} total")
+            
+            st.session_state.savings_accounts = merged_accounts
+            imported_settings.append(f"savings_accounts: {len(valid_accounts)} imported, {len(preserved_accounts)} preserved, {len(merged_accounts)} total")
         
         # Clean up existing expense widget keys before importing new expenses
         # This prevents orphaned keys from conflicting with newly imported expenses
