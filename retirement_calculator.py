@@ -904,6 +904,97 @@ def create_interactive_retirement_chart(df: pd.DataFrame, currency: str, wealth_
     return fig
 
 
+def create_individual_savings_chart(individual_df: pd.DataFrame, currency: str, savings_accounts: list) -> go.Figure:
+    """Create a stacked area chart showing individual savings account growth over time."""
+    fig = go.Figure()
+    
+    # Define color palette for different accounts (with transparency)
+    colors = [
+        {'fill': 'rgba(31, 119, 180, 0.7)', 'line': 'rgba(31, 119, 180, 1.0)'},      # Blue
+        {'fill': 'rgba(255, 127, 14, 0.7)', 'line': 'rgba(255, 127, 14, 1.0)'},     # Orange
+        {'fill': 'rgba(44, 160, 44, 0.7)', 'line': 'rgba(44, 160, 44, 1.0)'},       # Green
+        {'fill': 'rgba(214, 39, 40, 0.7)', 'line': 'rgba(214, 39, 40, 1.0)'},       # Red
+        {'fill': 'rgba(148, 103, 189, 0.7)', 'line': 'rgba(148, 103, 189, 1.0)'},   # Purple
+        {'fill': 'rgba(140, 86, 75, 0.7)', 'line': 'rgba(140, 86, 75, 1.0)'},       # Brown
+        {'fill': 'rgba(227, 119, 194, 0.7)', 'line': 'rgba(227, 119, 194, 1.0)'},   # Pink
+        {'fill': 'rgba(127, 127, 127, 0.7)', 'line': 'rgba(127, 127, 127, 1.0)'},   # Gray
+        {'fill': 'rgba(188, 189, 34, 0.7)', 'line': 'rgba(188, 189, 34, 1.0)'},     # Olive
+        {'fill': 'rgba(23, 190, 207, 0.7)', 'line': 'rgba(23, 190, 207, 1.0)'},     # Cyan
+    ]
+    
+    if individual_df.empty or len(savings_accounts) == 0:
+        # Create empty chart with message
+        fig.add_annotation(
+            text="No savings accounts configured",
+            x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(size=16)
+        )
+        fig.update_layout(
+            title='Individual Savings Account Growth',
+            xaxis_title='Age',
+            yaxis_title=f'Portfolio Value (thousands {currency})',
+            height=400
+        )
+        return fig
+    
+    ages = individual_df['Age']
+    account_columns = [col for col in individual_df.columns if col != 'Age']
+    
+    # Create stacked area traces for each account
+    cumulative_values = None
+    
+    for i, account_name in enumerate(account_columns):
+        account_values = individual_df[account_name] / 1000  # Convert to thousands
+        
+        # For stacked area, we need cumulative values
+        if cumulative_values is None:
+            cumulative_values = account_values
+            y_lower = [0] * len(ages)
+        else:
+            y_lower = cumulative_values.copy()
+            cumulative_values = cumulative_values + account_values
+        
+        # Use modulo to cycle through colors if more accounts than colors
+        color_set = colors[i % len(colors)]
+        
+        fig.add_trace(go.Scatter(
+            x=ages,
+            y=cumulative_values,
+            fill='tonexty' if i > 0 else 'tozeroy',
+            mode='none',
+            name=account_name,
+            fillcolor=color_set['fill'],
+            line=dict(color=color_set['line']),
+            hovertemplate=(
+                f'<b>{account_name}</b><br>' +
+                f'Account Value: {currency}%{{customdata[0]:,.0f}}<br>' +
+                f'Total Portfolio: {currency}%{{y:,.0f}}k<br>' +
+                '<extra></extra>'
+            ),
+            customdata=[[val * 1000] for val in account_values]
+        ))
+    
+    fig.update_layout(
+        title='Individual Savings Account Growth',
+        xaxis_title='Age',
+        yaxis_title=f'Portfolio Value (thousands {currency})',
+        hovermode='x unified',
+        height=400,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+    )
+    
+    return fig
+
+
 # Scenario presets
 SCENARIO_PRESETS = {
     "Conservative": {
@@ -965,6 +1056,47 @@ def calculate_wealth_accumulation(savings_accounts: list, user_age: int, ret_age
             total_wealth += account_value
         
         records.append({"Age": age, "Wealth_Balance": total_wealth})
+    
+    return pd.DataFrame(records)
+
+
+def calculate_individual_account_growth(savings_accounts: list, user_age: int, ret_age: int, inflation_rate: float) -> pd.DataFrame:
+    """Calculate individual savings account growth over time for stacked chart visualization."""
+    records = []
+    
+    for age in range(user_age, ret_age + 1):
+        years_elapsed = age - user_age
+        record = {"Age": age}
+        
+        for i, account in enumerate(savings_accounts):
+            # Skip disabled accounts
+            if not account.get('enabled', True):
+                continue
+                
+            account_value = 0
+            
+            # Calculate growth from initial amount
+            if account['amount'] > 0:
+                account_value += account['amount'] * (1 + account['roi']) ** years_elapsed
+            
+            # Calculate growth from monthly deposits (Future Value of Annuity)
+            monthly_deposit = account.get('monthly_deposit', 0)
+            if monthly_deposit > 0 and years_elapsed > 0:
+                months_elapsed = years_elapsed * 12
+                monthly_rate = account['roi'] / 12
+                if monthly_rate > 0:
+                    # FV of ordinary annuity formula
+                    annuity_value = monthly_deposit * ((1 + monthly_rate) ** months_elapsed - 1) / monthly_rate
+                else:
+                    # If no interest, just sum the deposits
+                    annuity_value = monthly_deposit * months_elapsed
+                account_value += annuity_value
+            
+            # Use account name as column, fallback to index-based name
+            account_name = account.get('name', f'Account {i+1}')
+            record[account_name] = account_value
+        
+        records.append(record)
     
     return pd.DataFrame(records)
 
@@ -2252,10 +2384,12 @@ real‑world spending patterns and country-specific social security systems.""")
     
     # Calculate wealth accumulation from savings accounts and expenses
     wealth_df = pd.DataFrame()
+    individual_accounts_df = pd.DataFrame()
     wealth_at_retirement = 0
     
     if st.session_state.savings_accounts:
         wealth_df = calculate_wealth_accumulation(st.session_state.savings_accounts, user_age, ret_age, inflation_rate)
+        individual_accounts_df = calculate_individual_account_growth(st.session_state.savings_accounts, user_age, ret_age, inflation_rate)
         wealth_df = apply_planned_expenses(wealth_df, st.session_state.planned_expenses, user_age, inflation_rate)
         wealth_at_retirement = wealth_df[wealth_df['Age'] == ret_age]['Wealth_Balance'].iloc[0] if len(wealth_df) > 0 else 0
     
@@ -2588,6 +2722,28 @@ real‑world spending patterns and country-specific social security systems.""")
                     break
             if depletion_age:
                 st.error(f"💸 Savings would run out around age {depletion_age:.0f}")
+        
+        # Individual Savings Account Growth Chart
+        if st.session_state.savings_accounts and not individual_accounts_df.empty:
+            st.subheader("Individual Savings Account Growth")
+            st.caption("📊 **Stacked Area Chart**: Shows how each savings account contributes to your total portfolio growth. Hover over any area to see individual account values.")
+            
+            # Filter to only enabled accounts for the chart
+            enabled_accounts = [acc for acc in st.session_state.savings_accounts if acc.get('enabled', True)]
+            
+            individual_fig = create_individual_savings_chart(individual_accounts_df, config['symbol'], enabled_accounts)
+            st.plotly_chart(individual_fig, use_container_width=True)
+            
+            # Add summary of accounts
+            if enabled_accounts:
+                total_current_value = sum(acc['amount'] for acc in enabled_accounts)
+                total_monthly_deposits = sum(acc.get('monthly_deposit', 0) for acc in enabled_accounts)
+                
+                col_summary1, col_summary2 = st.columns(2)
+                with col_summary1:
+                    st.metric("Current Total Value", format_currency(total_current_value, config['symbol']))
+                with col_summary2:
+                    st.metric("Monthly Contributions", format_currency(total_monthly_deposits, config['symbol']))
 
     # Detailed breakdown
     st.subheader("📋 Annual Spending & Income Detail (first 20 years)")
