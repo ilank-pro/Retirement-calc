@@ -337,6 +337,78 @@ def export_chart_for_pdf(df: pd.DataFrame, currency: str, wealth_df: pd.DataFram
     return img_buffer
 
 
+def export_individual_savings_chart_for_pdf(individual_df: pd.DataFrame, currency: str, savings_accounts: list) -> BytesIO:
+    """Create a matplotlib stacked area chart for individual savings accounts optimized for PDF export."""
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    if individual_df.empty or len(savings_accounts) == 0:
+        # Create empty chart with message
+        ax.text(0.5, 0.5, 'No savings accounts configured', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=16)
+        ax.set_title('Individual Savings Account Growth', fontsize=14, pad=20)
+        ax.set_xlabel('Age', fontsize=12)
+        ax.set_ylabel(f'Portfolio Value (thousands {currency})', fontsize=12)
+    else:
+        # Get enabled accounts only
+        enabled_accounts = [acc for acc in savings_accounts if acc.get('enabled', True)]
+        
+        if not enabled_accounts:
+            ax.text(0.5, 0.5, 'No enabled savings accounts', 
+                    horizontalalignment='center', verticalalignment='center', 
+                    transform=ax.transAxes, fontsize=16)
+        else:
+            # Prepare data for stacked area chart
+            ages = individual_df['Age']
+            
+            # Define color palette (similar to the Plotly version)
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
+                     '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+            
+            # Get account columns (same logic as Plotly version)
+            account_columns = [col for col in individual_df.columns if col != 'Age']
+            
+            # Create stacked data
+            account_values = []
+            labels = []
+            for i, account_name in enumerate(account_columns):
+                if account_name in individual_df.columns:
+                    # Convert to thousands for readability
+                    values = individual_df[account_name] / 1000
+                    account_values.append(values)
+                    # Process Hebrew text for proper RTL display (same as savings table)
+                    processed_label = process_hebrew_text(account_name)
+                    labels.append(processed_label)
+            
+            if account_values:
+                # Create stacked area chart
+                ax.stackplot(ages, *account_values, labels=labels, 
+                            colors=colors[:len(account_values)], alpha=0.7)
+                
+                # Customize the chart
+                ax.set_title('Individual Savings Account Growth', fontsize=14, pad=20)
+                ax.set_xlabel('Age', fontsize=12)
+                ax.set_ylabel(f'Portfolio Value (thousands {currency})', fontsize=12)
+                ax.grid(True, alpha=0.3)
+                ax.legend(loc='upper left', bbox_to_anchor=(0, 1))
+                
+                # Format y-axis to show currency
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{currency}{x:.0f}K'))
+            else:
+                ax.text(0.5, 0.5, 'No account data available', 
+                        horizontalalignment='center', verticalalignment='center', 
+                        transform=ax.transAxes, fontsize=16)
+    
+    # Save to BytesIO for embedding in PDF
+    img_buffer = BytesIO()
+    fig.savefig(img_buffer, format='png', dpi=300, bbox_inches='tight')
+    img_buffer.seek(0)
+    plt.close(fig)  # Clean up memory
+    
+    return img_buffer
+
+
 def contains_hebrew(text):
     """Check if text contains Hebrew characters."""
     if not text:
@@ -507,7 +579,8 @@ def generate_pdf_report(
     savings_accounts: list,
     planned_expenses: list,
     scenario: str,
-    wealth_df: pd.DataFrame = None
+    wealth_df: pd.DataFrame = None,
+    individual_accounts_df: pd.DataFrame = None
 ) -> bytes:
     """Generate a comprehensive PDF report of the retirement analysis."""
     
@@ -642,6 +715,22 @@ def generate_pdf_report(
         
         enabled_accounts = [acc for acc in savings_accounts if acc.get('enabled', True)]
         enabled_expenses = [exp for exp in planned_expenses if exp.get('enabled', True)]
+        
+        # Add individual savings account chart if data is available
+        if individual_accounts_df is not None and not individual_accounts_df.empty and enabled_accounts:
+            try:
+                # Generate and embed individual savings chart
+                individual_chart_buffer = export_individual_savings_chart_for_pdf(
+                    individual_accounts_df, config['symbol'], enabled_accounts
+                )
+                individual_chart_img = Image(individual_chart_buffer, width=6*inch, height=3.6*inch)
+                story.append(individual_chart_img)
+                story.append(Spacer(1, 12))
+                if DEBUG_LOGGING:
+                    logger.info(f"✅ Individual savings chart added to PDF")
+            except Exception as e:
+                if DEBUG_LOGGING:
+                    logger.error(f"❌ Failed to add individual savings chart to PDF: {str(e)}")
         
         if enabled_accounts:
             if DEBUG_LOGGING:
@@ -2626,7 +2715,8 @@ real‑world spending patterns and country-specific social security systems.""")
                         savings_accounts=st.session_state.savings_accounts,
                         planned_expenses=st.session_state.planned_expenses,
                         scenario=current_scenario,
-                        wealth_df=wealth_df
+                        wealth_df=wealth_df,
+                        individual_accounts_df=individual_accounts_df
                     )
                     
                     # Create download button
